@@ -323,9 +323,14 @@ current_issue = response.json()["issues"][0]
         "authors": "An, Byeong-Je; Pae, Suil",
         "startPage": "1",
         "endPage": "26",
+        "abstract": "This paper presents a model in which investors price risk...",
+        "doi": "10.2308/TAR-2021-0123",
         "ILLURL": "https://...",
         "linkResolverOpenurlLink": "https://...",
-        "permalink": "https://..."
+        "permalink": "https://...",
+        "openAccess": false,
+        "inPress": false,
+        "suppressed": false
       },
       "relationships": {
         "journal": {
@@ -342,6 +347,14 @@ current_issue = response.json()["issues"][0]
   }
 }
 ```
+
+**Important**: The response includes the `abstract` field for each article. All 30 attribute fields are returned, including:
+- `abstract`: Article abstract text
+- `doi`: Digital Object Identifier
+- `openAccess`: Open access status
+- `pmid`: PubMed ID (if available)
+- `fullTextFile`: Full text PDF URL (if available)
+- `contentLocation`: Content access URL
 
 **Python Example**:
 ```python
@@ -361,6 +374,8 @@ articles = response.json()["data"]
 - Approximately 18 articles per issue
 
 **Status**: ✅ Verified (200 OK)
+
+**Note on Abstracts**: Article abstracts are automatically included in the response attributes. No additional API call or parameter is required.
 
 ---
 
@@ -521,6 +536,81 @@ client.get_api_token()
 # Get all articles for The Accounting Review
 all_articles = client.get_all_articles(journal_id="34781")
 ```
+
+---
+
+## Article Abstracts
+
+### How to Retrieve Article Abstracts
+
+**Finding**: Article abstracts are automatically included in article list responses. No separate endpoint or special parameter is needed.
+
+**Endpoint**: Same as "Get Articles from Issue" (Section 6 above)
+
+**Abstract Location**: `data[].attributes.abstract`
+
+**Python Example**:
+```python
+url = "https://api.thirdiron.com/v2/libraries/3050/issues/641161731/articles"
+headers = {
+    "Accept": "application/vnd.api+json",
+    "Authorization": f"Bearer {token}",
+    "Referer": "https://browzine.com/",
+}
+params = {"client": "bzweb"}
+
+response = requests.get(url, headers=headers, params=params)
+articles = response.json()["data"]
+
+for article in articles:
+    title = article["attributes"]["title"]
+    abstract = article["attributes"].get("abstract", "No abstract available")
+    print(f"Title: {title}")
+    print(f"Abstract: {abstract}\n")
+```
+
+**Complete Article Attributes** (30 fields total):
+
+The API returns these fields for each article:
+- `syncId`: Internal sync identifier
+- `title`: Article title
+- `date`: Publication date
+- `authors`: Author names (comma-separated string)
+- `startPage`: Starting page number
+- `endPage`: Ending page number
+- `abstract`: **Article abstract text**
+- `doi`: Digital Object Identifier
+- `pmid`: PubMed ID (if applicable)
+- `ILLURL`: Interlibrary loan URL
+- `linkResolverOpenurlLink`: OpenURL resolver link
+- `emailArticleRequestLink`: Email request link
+- `permalink`: Permanent article link
+- `suppressed`: Suppression status
+- `inPress`: Whether article is in press
+- `openAccess`: Open access availability
+- `platformId`: Platform identifier
+- `retractionDoi`: Retraction DOI (if retracted)
+- `retractionDate`: Retraction date (if retracted)
+- `retractionRelatedUrls`: Related retraction URLs
+- `unpaywallDataSuppressed`: Unpaywall suppression status
+- `expressionOfConcernDoi`: Expression of concern DOI (if applicable)
+- `withinLibraryHoldings`: Library holdings status
+- `noodleToolsExportLink`: NoodleTools export link
+- `avoidUnpaywallPublisherLinks`: Unpaywall publisher link flag
+- `browzineWebInContextLink`: BrowZine web context link
+- `contentLocation`: Primary content location URL
+- `libkeyContentLocation`: LibKey content location
+- `fullTextFile`: Full text PDF file URL (if available)
+- `libkeyFullTextFile`: LibKey full text file URL
+- `nomadFallbackURL`: NOMAD fallback URL
+
+**Verification Method**:
+1. Tested with library ID `3050` (CEIBS)
+2. Journal ID `34781` (The Accounting Review)
+3. Issue ID `641161731` (Vol. 101 Issue 1, 2026)
+4. Retrieved 18 articles, all containing `abstract` field
+
+**Status**: ✅ Verified (2026-01-28)
 
 ---
 
