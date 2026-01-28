@@ -432,9 +432,102 @@ in_press_articles = response.json()["data"]
 
 ---
 
+### 8. Search Journals by ISSN
+
+**Endpoint**: `GET /v2/libraries/{library_id}/search`
+
+**Description**: Search for journals by ISSN or other keywords. Returns journal ID and basic information.
+
+**Parameters**:
+- `client` (query, required): `bzweb`
+- `query` (query, required): Search query (ISSN, journal name, or keywords)
+
+**Request Headers**:
+```
+Accept: application/json, text/javascript, */*; q=0.01
+Authorization: Bearer {token}
+Referer: https://browzine.com/
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
+```
+
+**Response Example** (searching for ISSN "0001-4826"):
+```json
+{
+  "data": [
+    {
+      "id": 34781,
+      "title": "The Accounting Review (00014826)",
+      "name": "The Accounting Review",
+      "scimago_rank": "4.045",
+      "bookcase_id": null,
+      "subject_id": null,
+      "has_articles": true,
+      "issn_no_hyphen": "00014826",
+      "eissn_no_hyphen": "15587967",
+      "toc_data_approved_and_live": true,
+      "rank": -5,
+      "type": "journals"
+    }
+  ],
+  "meta": {
+    "externalSearchLocation": "https://ceibs.userservices.exlibrisgroup.com.cn/discovery/jsearch?query=any,contains,0001-4826&tab=jsearch_slot&vid=86CEIBS_INST:Services&offset=0&journals=any,"
+  }
+}
+```
+
+**Response Fields**:
+- `data`: Array of matching journals
+  - `id`: Journal ID (use this for subsequent API calls)
+  - `title`: Journal title with ISSN in parentheses
+  - `name`: Journal name without ISSN
+  - `scimago_rank`: Scimago journal ranking
+  - `issn_no_hyphen`: ISSN without hyphens
+  - `eissn_no_hyphen`: Electronic ISSN without hyphens
+  - `has_articles`: Whether journal has articles available
+  - `toc_data_approved_and_live`: Table of contents data availability
+- `meta`: Metadata including external search location
+
+**Python Example**:
+```python
+url = "https://api.thirdiron.com/v2/libraries/3050/search"
+headers = {
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Authorization": f"Bearer {token}",
+    "Referer": "https://browzine.com/",
+}
+params = {
+    "client": "bzweb",
+    "query": "0001-4826"
+}
+
+response = requests.get(url, headers=headers, params=params)
+data = response.json()
+
+if data["data"]:
+    journal = data["data"][0]
+    journal_id = journal["id"]
+    print(f"Found: {journal['name']} (ID: {journal_id})")
+```
+
+**Usage Notes**:
+- ISSN can be provided with or without hyphens (e.g., "0001-4826" or "00014826")
+- The search also works with journal names and other keywords
+- Returns empty `data` array if no matches found
+- Multiple results may be returned for generic searches
+- For ISSN searches, typically returns one exact match
+
+**Status**: ✅ Verified (200 OK)
+
+**Verified Test Cases**:
+- ISSN "0001-4826" → Journal ID 34781 (The Accounting Review)
+- ISSN "0160-8061" → Journal ID 16246 (Journal of Organizational Behavior Management)
+- ISSN "0022-1082" → Journal ID 5188 (The Journal of Finance)
+
+---
+
 ## Complete Workflow Example
 
-### Getting All Articles from All Issues Across All Years
+### Search Journal by ISSN and Get All Articles
 
 ```python
 import requests
@@ -473,6 +566,23 @@ class BrowZineAPIClient:
             "Authorization": f"Bearer {self.token}",
             "Referer": "https://browzine.com/",
         }
+
+    def search_by_issn(self, issn: str) -> dict | None:
+        """Search for a journal by ISSN and return journal info."""
+        url = f"{self.base_url}/libraries/{self.library_id}/search"
+        headers = {
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Authorization": f"Bearer {self.token}",
+            "Referer": "https://browzine.com/",
+        }
+        params = {"client": "bzweb", "query": issn}
+
+        response = requests.get(url, headers=headers, params=params)
+        data = response.json()
+
+        if data.get("data"):
+            return data["data"][0]
+        return None
 
     def get_publication_years(self, journal_id: str) -> list[int]:
         url = f"{self.base_url}/libraries/{self.library_id}/journals/{journal_id}/publication-years"
@@ -529,11 +639,29 @@ class BrowZineAPIClient:
 
         return all_data
 
-# Usage
+# Usage Example 1: Search by ISSN and get all articles
 client = BrowZineAPIClient(library_id="3050")
 client.get_api_token()
 
-# Get all articles for The Accounting Review
+# Search for journal by ISSN
+issn = "0001-4826"
+journal = client.search_by_issn(issn)
+
+if journal:
+    journal_id = journal["id"]
+    journal_name = journal["name"]
+    print(f"Found: {journal_name} (ID: {journal_id})")
+
+    # Get all articles for this journal
+    all_articles = client.get_all_articles(journal_id=str(journal_id))
+else:
+    print(f"Journal with ISSN {issn} not found")
+
+# Usage Example 2: Direct journal ID lookup
+client = BrowZineAPIClient(library_id="3050")
+client.get_api_token()
+
+# Get all articles for The Accounting Review (known ID)
 all_articles = client.get_all_articles(journal_id="34781")
 ```
 
@@ -632,7 +760,7 @@ The API returns these fields for each article:
 
 ## Verification Summary
 
-**Total Endpoints Verified**: 6 core endpoints
+**Total Endpoints Verified**: 7 core endpoints + 1 search endpoint
 
 **All Verified Endpoints Return**: ✅ 200 OK
 
