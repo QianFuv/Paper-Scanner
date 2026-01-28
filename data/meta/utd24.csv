@@ -1,25 +1,25 @@
-title,id,area
-The Accounting Review,34781,Accounting
-Journal of Accounting and Economics,4204,Accounting
-Journal of Accounting Research,11189,Accounting
-The Journal of Finance,5188,Finance
-Journal of Financial Economics,1268,Finance
-Review of Financial Studies,10483,Finance
-Information Systems Research,18332,Information Systems
-INFORMS Journal on Computing,18333,Information Systems
-MIS Quarterly,73097,Information Systems
-Journal of International Business Studies,10571,International Business
-Journal of Consumer Research,33285,Marketing
-Journal of Marketing,32063,Marketing
-Journal of Marketing Research,32064,Marketing
-Marketing Science,18334,Marketing
-Academy of Management Journal,32052,Management
-Academy of Management Review,32054,Management
-Administrative Science Quarterly,8622,Management
-Management Science,18335,Management
-Strategic Management Journal,12230,Management
-Journal of Operations Management,1201,Operations
-Manufacturing & Service Operations Management,18342,Operations
-Operations Research,18337,Operations
-Production and Operations Management,1886,Operations
-Organization Science,18338,Organizational Behaviour
+title,issn,id,area,rank
+The Accounting Review,,34781,Accounting,utd24
+Journal of Accounting and Economics,,4204,Accounting,utd24
+Journal of Accounting Research,,11189,Accounting,utd24
+The Journal of Finance,,5188,Finance,utd24
+Journal of Financial Economics,,1268,Finance,utd24
+Review of Financial Studies,,10483,Finance,utd24
+Information Systems Research,,18332,Information Systems,utd24
+INFORMS Journal on Computing,,18333,Information Systems,utd24
+MIS Quarterly,,73097,Information Systems,utd24
+Journal of International Business Studies,,10571,International Business,utd24
+Journal of Consumer Research,,33285,Marketing,utd24
+Journal of Marketing,,32063,Marketing,utd24
+Journal of Marketing Research,,32064,Marketing,utd24
+Marketing Science,,18334,Marketing,utd24
+Academy of Management Journal,,32052,Management,utd24
+Academy of Management Review,,32054,Management,utd24
+Administrative Science Quarterly,,8622,Management,utd24
+Management Science,,18335,Management,utd24
+Strategic Management Journal,,12230,Management,utd24
+Journal of Operations Management,,1201,Operations,utd24
+Manufacturing & Service Operations Management,,18342,Operations,utd24
+Operations Research,,18337,Operations,utd24
+Production and Operations Management,,1886,Operations,utd24
+Organization Science,,18338,Organizational Behaviour,utd24
