@@ -1,0 +1,6 @@
+/.claude
+/.*_cache
+/.venv
+/.vscode
+/*.egg-info
+/CLAUDE.md

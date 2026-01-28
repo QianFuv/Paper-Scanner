@@ -1,0 +1,31 @@
+[project]
+name = "ps"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.18.2",
+    "ruff>=0.14.6"
+]
+
+[tool.setuptools]
+packages = ["scripts"]
+
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.uv]
+required-environments = [
+    "sys_platform == 'win32'"
+]
+
+[tool.ruff.lint]
+select = ["E","F","UP","B","SIM","I"]
+
+[tool.mypy]
+disable_error_code = ["import-untyped"]
