@@ -1168,6 +1168,9 @@ async def init_db(db: aiosqlite.Connection) -> None:
         db, "CREATE INDEX IF NOT EXISTS idx_journal_meta_area ON journal_meta(area);"
     )
     await execute_with_retry(
+        db, "CREATE INDEX IF NOT EXISTS idx_journal_meta_rank ON journal_meta(rank);"
+    )
+    await execute_with_retry(
         db,
         "CREATE INDEX IF NOT EXISTS idx_issues_journal_year "
         "ON issues(journal_id, publication_year);",
