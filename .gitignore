@@ -3,4 +3,7 @@
 /.venv
 /.vscode
 /*.egg-info
+/data/index
+/AGENTS.md
 /CLAUDE.md
+__pycache__
