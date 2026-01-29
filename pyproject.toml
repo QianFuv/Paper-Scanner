@@ -21,6 +21,7 @@ dev = [
 [project.scripts]
 fill = "scripts.utility.fill:main"
 valid = "scripts.utility.valid:main"
+index = "scripts.index:main"
 
 [tool.setuptools]
 packages = ["scripts"]
