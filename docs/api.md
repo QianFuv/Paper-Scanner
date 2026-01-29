@@ -56,33 +56,6 @@ Example:
 
 - `q=earnings OR disclosure`
 
-## Regex Filtering
-
-Articles support regex filtering applied after FTS:
-
-- `regex` is required to enable regex filtering.
-- `q` must be supplied to prefilter via FTS5.
-- Regex is applied in application code after FTS.
-- If the FTS prefilter matches more than 5,000 rows, the API returns HTTP 400.
-
-Parameters:
-
-- `regex`: Regex pattern.
-- `regex_fields`: Comma-separated fields to match.
-- `regex_ignore_case`: default `true`.
-
-Allowed `regex_fields`:
-
-- `title`
-- `abstract`
-- `authors`
-- `doi`
-- `journal_title`
-
-Example:
-
-- `/articles?q=machine AND learning&regex=transformer&regex_fields=title,abstract`
-
 ## Endpoints
 
 ### Health
@@ -195,9 +168,6 @@ Filters:
 - `doi`
 - `pmid`
 - `q` (FTS5 query)
-- `regex` (regex applied after FTS)
-- `regex_fields`
-- `regex_ignore_case`
 
 Sorting fields:
 
@@ -214,16 +184,11 @@ Example:
 
 `/articles?journal_id=34781&year=2024&q=earnings OR disclosure&sort=date:desc`
 
-Regex example:
-
-`/articles?q=machine AND learning&regex=transformer&regex_fields=title,abstract`
-
 `GET /articles/{article_id}`
 
 Returns a single article record (404 if not found).
 
 ## Error Responses
 
-- `400 Bad Request`: invalid sort field, invalid regex, regex without `q`,
-  or too many FTS matches for regex filtering.
+- `400 Bad Request`: invalid sort field.
 - `404 Not Found`: database, journal, issue, or article not found.

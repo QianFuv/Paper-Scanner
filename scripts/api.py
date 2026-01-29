@@ -4,7 +4,6 @@ FastAPI backend for querying BrowZine article index databases.
 
 from __future__ import annotations
 
-import re
 import sqlite3
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
@@ -14,12 +13,14 @@ from typing import Annotated, Any
 import aiosqlite
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 
 PROJECT_ROOT = Path(__file__).parent.parent
 INDEX_DIR = PROJECT_ROOT / "data" / "index"
 MAX_LIMIT = 200
-MAX_REGEX_CANDIDATES = 5000
 
 
 class JournalRecord(BaseModel):
@@ -103,6 +104,8 @@ class ArticleRecord(BaseModel):
     libkey_full_text_file: str | None = None
     nomad_fallback_url: str | None = None
     journal_title: str | None = None
+    volume: str | None = None
+    number: str | None = None
 
 
 class PageMeta(BaseModel):
@@ -110,9 +113,11 @@ class PageMeta(BaseModel):
     Pagination metadata.
     """
 
-    total: int
+    total: int | None
     limit: int
     offset: int
+    next_cursor: str | None = None
+    has_more: bool | None = None
 
 
 class JournalPage(BaseModel):
@@ -173,6 +178,33 @@ class SortSpec:
 
 app = FastAPI(title="Paper Scanner API", version="1.0.0")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class CacheControlMiddleware(BaseHTTPMiddleware):
+    """
+    Add cache control headers to API responses.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        is_articles = request.url.path.startswith("/articles")
+        is_meta = request.url.path.startswith("/meta")
+        if is_articles or is_meta:
+            response.headers["Cache-Control"] = (
+                "public, max-age=300, stale-while-revalidate=600"
+            )
+        return response
+
+
+app.add_middleware(CacheControlMiddleware)
+
 
 def resolve_db_path(db_name: str | None) -> Path:
     """
@@ -202,47 +234,6 @@ def resolve_db_path(db_name: str | None) -> Path:
     raise HTTPException(
         status_code=400, detail="Multiple databases found, specify ?db=<name>"
     )
-
-
-def compile_regex(pattern: str, ignore_case: bool) -> re.Pattern[str]:
-    """
-    Compile a regular expression for filtering.
-
-    Args:
-        pattern: Regex pattern.
-        ignore_case: Whether to ignore case.
-
-    Returns:
-        Compiled regex pattern.
-    """
-    flags = re.IGNORECASE if ignore_case else 0
-    try:
-        return re.compile(pattern, flags)
-    except re.error as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid regex: {exc}") from exc
-
-
-def regex_match_any(
-    regex: re.Pattern[str],
-    fields: list[str],
-    record: dict[str, Any],
-) -> bool:
-    """
-    Test whether any field in a record matches the regex.
-
-    Args:
-        regex: Compiled regex.
-        fields: Record fields to test.
-        record: Row dictionary.
-
-    Returns:
-        True if any field matches, otherwise False.
-    """
-    for field in fields:
-        value = record.get(field)
-        if value and regex.search(str(value)):
-            return True
-    return False
 
 
 def parse_sort(sort: str | None, allowed: dict[str, str]) -> list[SortSpec]:
@@ -297,7 +288,13 @@ def apply_sort(specs: list[SortSpec]) -> str:
     return f" ORDER BY {', '.join(parts)}"
 
 
-def build_page_meta(total: int, limit: int, offset: int) -> PageMeta:
+def build_page_meta(
+    total: int | None,
+    limit: int,
+    offset: int,
+    next_cursor: str | None = None,
+    has_more: bool | None = None,
+) -> PageMeta:
     """
     Build pagination metadata.
 
@@ -305,11 +302,55 @@ def build_page_meta(total: int, limit: int, offset: int) -> PageMeta:
         total: Total rows.
         limit: Page size.
         offset: Page offset.
+        next_cursor: Cursor for keyset pagination.
+        has_more: Whether more rows are available.
 
     Returns:
         Page metadata.
     """
-    return PageMeta(total=total, limit=limit, offset=offset)
+    return PageMeta(
+        total=total,
+        limit=limit,
+        offset=offset,
+        next_cursor=next_cursor,
+        has_more=has_more,
+    )
+
+
+def parse_article_cursor(cursor: str) -> tuple[str, int]:
+    """
+    Parse a cursor string for keyset pagination.
+
+    Args:
+        cursor: Cursor string in "{date}|{article_id}" format.
+
+    Returns:
+        Tuple of date string and article id.
+    """
+    parts = cursor.split("|", 1)
+    if len(parts) != 2 or not parts[0]:
+        raise HTTPException(status_code=400, detail="Invalid cursor")
+    try:
+        article_id = int(parts[1])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid cursor") from exc
+    return parts[0], article_id
+
+
+def build_article_cursor(date_value: str | None, article_id: int) -> str | None:
+    """
+    Build a cursor string from an article row.
+
+    Args:
+        date_value: Article date value.
+        article_id: Article identifier.
+
+    Returns:
+        Cursor string or None when date is missing.
+    """
+    if not date_value:
+        return None
+    return f"{date_value}|{article_id}"
 
 
 async def get_db(
@@ -420,14 +461,6 @@ ARTICLE_SORT_FIELDS = {
     "doi": "a.doi",
 }
 
-ARTICLE_REGEX_FIELDS = {
-    "title": "title",
-    "abstract": "abstract",
-    "authors": "authors",
-    "doi": "doi",
-    "journal_title": "journal_title",
-}
-
 
 @app.get("/health")
 async def health() -> dict[str, str]:
@@ -438,6 +471,19 @@ async def health() -> dict[str, str]:
         Health status payload.
     """
     return {"status": "ok"}
+
+
+@app.get("/meta/databases", response_model=list[str])
+async def list_databases() -> list[str]:
+    """
+    List available SQLite databases.
+
+    Returns:
+        List of database filenames.
+    """
+    if not INDEX_DIR.exists():
+        return []
+    return [f.name for f in sorted(INDEX_DIR.glob("*.sqlite"))]
 
 
 @app.get("/meta/areas", response_model=list[ValueCount])
@@ -460,7 +506,7 @@ async def list_areas(
         FROM journal_meta
         WHERE area IS NOT NULL AND area != ''
         GROUP BY area
-        ORDER BY count DESC, value ASC
+        ORDER BY value ASC
         """,
         [],
     )
@@ -487,7 +533,7 @@ async def list_ranks(
         FROM journal_meta
         WHERE rank IS NOT NULL AND rank != ''
         GROUP BY rank
-        ORDER BY count DESC, value ASC
+        ORDER BY value ASC
         """,
         [],
     )
@@ -538,13 +584,13 @@ async def list_years(
         db,
         """
         SELECT
-            publication_year AS year,
+            CAST(strftime('%Y', date) AS INTEGER) AS year,
             COUNT(DISTINCT issue_id) AS issue_count,
             COUNT(DISTINCT journal_id) AS journal_count
         FROM issues
-        WHERE publication_year IS NOT NULL
-        GROUP BY publication_year
-        ORDER BY publication_year DESC
+        WHERE date IS NOT NULL
+        GROUP BY year
+        ORDER BY year DESC
         """,
         [],
     )
@@ -850,6 +896,8 @@ async def list_articles(
     journal_id: int | None = Query(default=None, ge=0),
     issue_id: int | None = Query(default=None, ge=0),
     year: int | None = Query(default=None, ge=0),
+    area: Annotated[list[str] | None, Query()] = None,
+    rank: Annotated[list[str] | None, Query()] = None,
     in_press: bool | None = Query(default=None),
     open_access: bool | None = Query(default=None),
     suppressed: bool | None = Query(default=None),
@@ -859,23 +907,21 @@ async def list_articles(
     doi: str | None = Query(default=None),
     pmid: str | None = Query(default=None),
     q: str | None = Query(default=None, description="FTS query for article_search"),
-    regex: str | None = Query(default=None),
-    regex_fields: str | None = Query(
-        default=None,
-        description="Comma-separated fields for regex filtering",
-    ),
-    regex_ignore_case: bool = Query(default=True),
     sort: str | None = Query(default="date:desc"),
     limit: int = Query(default=50, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
+    cursor: str | None = Query(default=None),
+    include_total: bool = Query(default=True),
 ) -> ArticlePage:
     """
-    List articles with filtering, FTS, regex filtering, and sorting.
+    List articles with filtering, FTS, and sorting.
 
     Args:
         journal_id: Filter by journal ID.
         issue_id: Filter by issue ID.
         year: Filter by publication year from issues.
+        area: Filter by journal area (multiple allowed).
+        rank: Filter by journal rank (multiple allowed).
         in_press: Filter by in_press flag.
         open_access: Filter by open_access flag.
         suppressed: Filter by suppressed flag.
@@ -885,12 +931,11 @@ async def list_articles(
         doi: Filter by DOI.
         pmid: Filter by PMID.
         q: Full-text search query for FTS5.
-        regex: Regex to apply after FTS filtering.
-        regex_fields: Fields to test for regex matches.
-        regex_ignore_case: Whether to ignore case for regex matching.
         sort: Multi-column sort string.
         limit: Page size.
         offset: Page offset.
+        cursor: Keyset cursor for pagination.
+        include_total: Whether to compute total count.
         db: Database connection.
 
     Returns:
@@ -898,12 +943,10 @@ async def list_articles(
     """
     where_clauses: list[str] = []
     params: list[Any] = []
-    join_issue = year is not None
+    join_meta = (area is not None and len(area) > 0) or (
+        rank is not None and len(rank) > 0
+    )
     join_search = q is not None and q.strip() != ""
-    if regex and not join_search:
-        raise HTTPException(
-            status_code=400, detail="regex requires q for FTS prefilter"
-        )
 
     if journal_id is not None:
         where_clauses.append("a.journal_id = ?")
@@ -911,6 +954,14 @@ async def list_articles(
     if issue_id is not None:
         where_clauses.append("a.issue_id = ?")
         params.append(issue_id)
+    if area:
+        placeholders = ", ".join(["?"] * len(area))
+        where_clauses.append(f"m.area IN ({placeholders})")
+        params.extend(area)
+    if rank:
+        placeholders = ", ".join(["?"] * len(rank))
+        where_clauses.append(f"m.rank IN ({placeholders})")
+        params.extend(rank)
     if in_press is not None:
         where_clauses.append("a.in_press = ?")
         params.append(1 if in_press else 0)
@@ -943,107 +994,60 @@ async def list_articles(
         params.append(q.strip())
 
     join_sql = []
-    if join_issue:
-        join_sql.append("JOIN issues i ON i.issue_id = a.issue_id")
+    join_sql.append("LEFT JOIN issues i ON i.issue_id = a.issue_id")
     if join_search:
         join_sql.append(
             "JOIN article_search ON article_search.article_id = a.article_id"
         )
     join_sql.append("JOIN journals j ON j.journal_id = a.journal_id")
+    if join_meta:
+        join_sql.append("JOIN journal_meta m ON m.journal_id = j.journal_id")
+
     joins = " ".join(join_sql)
 
+    sort_specs = parse_sort(sort, ARTICLE_SORT_FIELDS)
+    supports_keyset = len(sort_specs) == 1 and sort_specs[0].column == "a.date"
+    if supports_keyset:
+        direction = sort_specs[0].direction
+        order_sql = f" ORDER BY a.date {direction}, a.article_id {direction}"
+    else:
+        direction = "DESC"
+        order_sql = apply_sort(sort_specs)
+
+    if cursor:
+        if not supports_keyset:
+            raise HTTPException(
+                status_code=400,
+                detail="Cursor pagination requires sort=date:desc or date:asc",
+            )
+        cursor_date, cursor_id = parse_article_cursor(cursor)
+        operator = "<" if direction == "DESC" else ">"
+        where_clauses.append(
+            f"(a.date {operator} ? OR (a.date = ? AND a.article_id {operator} ?))"
+        )
+        params.extend([cursor_date, cursor_date, cursor_id])
+
     where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-    order_sql = apply_sort(parse_sort(sort, ARTICLE_SORT_FIELDS))
 
-    count_row = await fetch_one(
-        db,
-        f"""
-        SELECT COUNT(*) AS total
-        FROM articles a
-        {joins}
-        {where_sql}
-        """,
-        params,
-    )
-    total = int(count_row["total"]) if count_row else 0
-
-    if regex:
-        if total > MAX_REGEX_CANDIDATES:
-            raise HTTPException(
-                status_code=400,
-                detail="Too many FTS matches for regex filtering; refine q or filters.",
-            )
-        regex_compiled = compile_regex(regex, regex_ignore_case)
-        if regex_fields:
-            selected_fields = [
-                field.strip() for field in regex_fields.split(",") if field.strip()
-            ]
-        else:
-            selected_fields = list(ARTICLE_REGEX_FIELDS.keys())
-        invalid_fields = [
-            field for field in selected_fields if field not in ARTICLE_REGEX_FIELDS
-        ]
-        if invalid_fields:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported regex fields: {', '.join(invalid_fields)}",
-            )
-
-        rows = await fetch_all(
+    total = None
+    if include_total:
+        count_row = await fetch_one(
             db,
             f"""
-            SELECT
-                a.article_id,
-                a.journal_id,
-                a.issue_id,
-                a.sync_id,
-                a.title,
-                a.date,
-                a.authors,
-                a.start_page,
-                a.end_page,
-                a.abstract,
-                a.doi,
-                a.pmid,
-                a.ill_url,
-                a.link_resolver_openurl_link,
-                a.email_article_request_link,
-                a.permalink,
-                a.suppressed,
-                a.in_press,
-                a.open_access,
-                a.platform_id,
-                a.retraction_doi,
-                a.retraction_date,
-                a.retraction_related_urls,
-                a.unpaywall_data_suppressed,
-                a.expression_of_concern_doi,
-                a.within_library_holdings,
-                a.noodletools_export_link,
-                a.avoid_unpaywall_publisher_links,
-                a.browzine_web_in_context_link,
-                a.content_location,
-                a.libkey_content_location,
-                a.full_text_file,
-                a.libkey_full_text_file,
-                a.nomad_fallback_url,
-                j.title AS journal_title
+            SELECT COUNT(*) AS total
             FROM articles a
             {joins}
             {where_sql}
-            {order_sql}
             """,
             params,
         )
-        filtered_rows = [
-            row for row in rows if regex_match_any(regex_compiled, selected_fields, row)
-        ]
-        total_filtered = len(filtered_rows)
-        page_rows = filtered_rows[offset : offset + limit]
-        return ArticlePage(
-            items=[ArticleRecord(**row) for row in page_rows],
-            page=build_page_meta(total_filtered, limit, offset),
-        )
+        total = int(count_row["total"]) if count_row else 0
+
+    pagination_sql = "LIMIT ?"
+    pagination_params: list[Any] = [limit]
+    if cursor is None:
+        pagination_sql = f"{pagination_sql} OFFSET ?"
+        pagination_params.append(offset)
 
     rows = await fetch_all(
         db,
@@ -1083,19 +1087,38 @@ async def list_articles(
             a.full_text_file,
             a.libkey_full_text_file,
             a.nomad_fallback_url,
-            j.title AS journal_title
+            j.title AS journal_title,
+            i.volume,
+            i.number
         FROM articles a
         {joins}
         {where_sql}
         {order_sql}
-        LIMIT ? OFFSET ?
+        {pagination_sql}
         """,
-        params + [limit, offset],
+        params + pagination_params,
     )
+
+    has_more = len(rows) == limit
+    next_cursor = None
+    if rows and has_more:
+        last_row = rows[-1]
+        next_cursor = build_article_cursor(
+            last_row.get("date"),
+            int(last_row["article_id"]),
+        )
+        if next_cursor is None:
+            has_more = False
 
     return ArticlePage(
         items=[ArticleRecord(**row) for row in rows],
-        page=build_page_meta(total, limit, offset),
+        page=build_page_meta(
+            total=total,
+            limit=limit,
+            offset=offset,
+            next_cursor=next_cursor,
+            has_more=has_more,
+        ),
     )
 
 
@@ -1152,8 +1175,11 @@ async def get_article(
             a.full_text_file,
             a.libkey_full_text_file,
             a.nomad_fallback_url,
-            j.title AS journal_title
+            j.title AS journal_title,
+            i.volume,
+            i.number
         FROM articles a
+        LEFT JOIN issues i ON i.issue_id = a.issue_id
         JOIN journals j ON j.journal_id = a.journal_id
         WHERE a.article_id = ?
         """,

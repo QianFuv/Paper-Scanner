@@ -6,4 +6,5 @@
 /data/index
 /AGENTS.md
 /CLAUDE.md
+app/config/auth.yaml
 __pycache__

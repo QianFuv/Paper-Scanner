@@ -1165,6 +1165,23 @@ async def init_db(db: aiosqlite.Connection) -> None:
         db, "CREATE INDEX IF NOT EXISTS idx_journals_issn ON journals(issn);"
     )
     await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_journals_library_id ON journals(library_id);",
+    )
+    await execute_with_retry(
+        db, "CREATE INDEX IF NOT EXISTS idx_journals_available ON journals(available);"
+    )
+    await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_journals_has_articles "
+        "ON journals(has_articles);",
+    )
+    await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_journals_scimago_rank "
+        "ON journals(scimago_rank);",
+    )
+    await execute_with_retry(
         db, "CREATE INDEX IF NOT EXISTS idx_journal_meta_area ON journal_meta(area);"
     )
     await execute_with_retry(
@@ -1172,8 +1189,23 @@ async def init_db(db: aiosqlite.Connection) -> None:
     )
     await execute_with_retry(
         db,
+        "CREATE INDEX IF NOT EXISTS idx_journal_meta_area_journal "
+        "ON journal_meta(area, journal_id);",
+    )
+    await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_journal_meta_rank_journal "
+        "ON journal_meta(rank, journal_id);",
+    )
+    await execute_with_retry(
+        db,
         "CREATE INDEX IF NOT EXISTS idx_issues_journal_year "
         "ON issues(journal_id, publication_year);",
+    )
+    await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_issues_publication_year "
+        "ON issues(publication_year);",
     )
     await execute_with_retry(
         db, "CREATE INDEX IF NOT EXISTS idx_articles_journal ON articles(journal_id);"
@@ -1185,7 +1217,25 @@ async def init_db(db: aiosqlite.Connection) -> None:
         db, "CREATE INDEX IF NOT EXISTS idx_articles_date ON articles(date);"
     )
     await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_articles_date_id "
+        "ON articles(date, article_id);",
+    )
+    await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_articles_journal_date_id "
+        "ON articles(journal_id, date, article_id);",
+    )
+    await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_articles_issue_date_id "
+        "ON articles(issue_id, date, article_id);",
+    )
+    await execute_with_retry(
         db, "CREATE INDEX IF NOT EXISTS idx_articles_doi ON articles(doi);"
+    )
+    await execute_with_retry(
+        db, "CREATE INDEX IF NOT EXISTS idx_articles_pmid ON articles(pmid);"
     )
     await execute_with_retry(
         db,
@@ -1194,7 +1244,51 @@ async def init_db(db: aiosqlite.Connection) -> None:
     await execute_with_retry(
         db, "CREATE INDEX IF NOT EXISTS idx_articles_in_press ON articles(in_press);"
     )
+    await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_articles_suppressed ON articles(suppressed);",
+    )
+    await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_articles_within_holdings "
+        "ON articles(within_library_holdings);",
+    )
+    await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_articles_open_access_date_id "
+        "ON articles(open_access, date, article_id);",
+    )
+    await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_articles_in_press_date_id "
+        "ON articles(in_press, date, article_id);",
+    )
+    await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_articles_suppressed_date_id "
+        "ON articles(suppressed, date, article_id);",
+    )
+    await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_articles_within_holdings_date_id "
+        "ON articles(within_library_holdings, date, article_id);",
+    )
 
+    await commit_with_retry(db)
+
+
+async def optimize_db(db: aiosqlite.Connection) -> None:
+    """
+    Run SQLite optimizations after data load.
+
+    Args:
+        db: Open aiosqlite connection.
+
+    Returns:
+        None.
+    """
+    await execute_with_retry(db, "ANALYZE;")
+    await execute_with_retry(db, "PRAGMA optimize;")
     await commit_with_retry(db)
 
 
@@ -2062,6 +2156,7 @@ async def export_csv(
                     )
             finally:
                 await local_db.close()
+                await optimize_db(db)
                 await client.aclose()
         return
 
@@ -2118,6 +2213,9 @@ async def export_csv(
         writer.join()
         for worker in workers:
             worker.join()
+
+    async with aiosqlite.connect(db_path, timeout=DB_TIMEOUT_SECONDS) as db:
+        await optimize_db(db)
 
 
 async def async_main(args: argparse.Namespace) -> None:
