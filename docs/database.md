@@ -1,8 +1,15 @@
 # SQLite Database Schema (Article Index)
 
-Each CSV under `data/meta` is exported to one SQLite database under
-`data/index/<csv_stem>.sqlite`. The schema is normalized for filtering and
-joins between journals, issues, and articles.
+Each CSV under `data/meta` is exported to one SQLite database at
+`data/index/<csv_stem>.sqlite`. The schema below is derived directly from
+`scripts/index.py`.
+
+## Initialization Notes
+
+- SQLite pragmas are set to `journal_mode=WAL`, `foreign_keys=ON`,
+  `synchronous=NORMAL`, and `busy_timeout=30000` milliseconds.
+- All timestamps are stored as `TEXT` (UTC ISO-8601 style strings).
+- Boolean values are stored as `INTEGER` with `0/1` convention.
 
 ## Tables
 
@@ -10,7 +17,7 @@ joins between journals, issues, and articles.
 Core journal metadata from BrowZine.
 
 - `journal_id` INTEGER PRIMARY KEY
-- `library_id` TEXT
+- `library_id` TEXT NOT NULL
 - `title` TEXT
 - `issn` TEXT
 - `eissn` TEXT
@@ -21,10 +28,10 @@ Core journal metadata from BrowZine.
 - `has_articles` INTEGER (0/1)
 
 ### `journal_meta`
-CSV list metadata for filtering (area, rank, etc).
+CSV list metadata for filtering (area, rank, etc). One row per journal.
 
-- `journal_id` INTEGER PRIMARY KEY (FK -> `journals.journal_id`)
-- `source_csv` TEXT
+- `journal_id` INTEGER PRIMARY KEY (FK -> `journals.journal_id`, ON DELETE CASCADE)
+- `source_csv` TEXT NOT NULL
 - `area` TEXT
 - `rank` TEXT
 - `csv_title` TEXT
@@ -35,7 +42,7 @@ CSV list metadata for filtering (area, rank, etc).
 Journal issues and publication years.
 
 - `issue_id` INTEGER PRIMARY KEY
-- `journal_id` INTEGER (FK -> `journals.journal_id`)
+- `journal_id` INTEGER NOT NULL (FK -> `journals.journal_id`, ON DELETE CASCADE)
 - `publication_year` INTEGER
 - `title` TEXT
 - `volume` TEXT
@@ -47,11 +54,11 @@ Journal issues and publication years.
 - `within_subscription` INTEGER (0/1)
 
 ### `articles`
-All article attributes returned by BrowZine.
+Article attributes returned by BrowZine. In-press items have `issue_id` set to NULL.
 
 - `article_id` INTEGER PRIMARY KEY
-- `journal_id` INTEGER (FK -> `journals.journal_id`)
-- `issue_id` INTEGER (FK -> `issues.issue_id`, NULL for in-press articles)
+- `journal_id` INTEGER NOT NULL (FK -> `journals.journal_id`, ON DELETE CASCADE)
+- `issue_id` INTEGER (FK -> `issues.issue_id`, ON DELETE SET NULL)
 - `sync_id` INTEGER
 - `title` TEXT
 - `date` TEXT
@@ -87,17 +94,18 @@ All article attributes returned by BrowZine.
 ### `journal_year_state`
 Resume and incremental update state per journal year.
 
-- `journal_id` INTEGER
-- `year` INTEGER
-- `status` TEXT (`done`)
-- `updated_at` TEXT (UTC timestamp)
+- `journal_id` INTEGER NOT NULL
+- `year` INTEGER NOT NULL
+- `status` TEXT NOT NULL (currently `done`)
+- `updated_at` TEXT NOT NULL
+- PRIMARY KEY (`journal_id`, `year`)
 
 ### `journal_state`
 Resume and incremental update state per journal.
 
 - `journal_id` INTEGER PRIMARY KEY
-- `status` TEXT (`done`)
-- `updated_at` TEXT (UTC timestamp)
+- `status` TEXT NOT NULL (currently `done`)
+- `updated_at` TEXT NOT NULL
 
 ### `article_search` (FTS5)
 Full-text index for article search and filtering.
@@ -109,17 +117,19 @@ Full-text index for article search and filtering.
 - `authors` TEXT
 - `journal_title` TEXT
 
+Note: `rowid` is set to `article_id` when inserting into this table.
+
 ## Indexes
 
-- `journals(issn)`
-- `journal_meta(area)`
-- `issues(journal_id, publication_year)`
-- `articles(journal_id)`
-- `articles(issue_id)`
-- `articles(date)`
-- `articles(doi)`
-- `articles(open_access)`
-- `articles(in_press)`
+- `idx_journals_issn` on `journals(issn)`
+- `idx_journal_meta_area` on `journal_meta(area)`
+- `idx_issues_journal_year` on `issues(journal_id, publication_year)`
+- `idx_articles_journal` on `articles(journal_id)`
+- `idx_articles_issue` on `articles(issue_id)`
+- `idx_articles_date` on `articles(date)`
+- `idx_articles_doi` on `articles(doi)`
+- `idx_articles_open_access` on `articles(open_access)`
+- `idx_articles_in_press` on `articles(in_press)`
 
 ## Query Examples
 
