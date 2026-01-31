@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger } from '@/components/ui/dialog';
 import { ExternalLink, Copy, Check } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useInView } from 'react-intersection-observer';
 
 export function ResultsList() {
@@ -23,6 +24,9 @@ export function ResultsList() {
   const [ranks] = useQueryState('rank', parseAsArrayOf(parseAsString));
   const [yearMin] = useQueryState('year_min', parseAsInteger);
   const [yearMax] = useQueryState('year_max', parseAsInteger);
+  const searchParams = useSearchParams();
+  const searchKey = searchParams.toString();
+  const includeTotal = true;
 
   const handleCopyArticleInfo = async (article: Article) => {
       const info = [
@@ -77,7 +81,7 @@ export function ResultsList() {
     string | null
   >({
     queryKey: ['articles', paramsString],
-    queryFn: ({ pageParam }) => getArticles(params, pageParam),
+    queryFn: ({ pageParam }) => getArticles(params, pageParam, includeTotal),
     initialPageParam: null,
     getNextPageParam: (lastPage) => lastPage.page.next_cursor ?? undefined,
     staleTime: 5 * 60 * 1000,
@@ -86,7 +90,13 @@ export function ResultsList() {
 
   useEffect(() => {
     setVisiblePages(1);
-  }, [paramsString]);
+    const scrollContainer = document.getElementById('results-scroll-container');
+    if (scrollContainer) {
+      scrollContainer.scrollTo({ top: 0 });
+      return;
+    }
+    window.scrollTo({ top: 0 });
+  }, [searchKey]);
 
   const pages = data?.pages ?? [];
   const loadedPages = pages.length;
@@ -221,11 +231,15 @@ export function ResultsList() {
       return <div className="text-center p-8 text-slate-500">No articles found.</div>;
   }
 
+  const total = data?.pages[0]?.page.total ?? null;
+
   return (
     <div className="space-y-4">
-      <div className="text-sm text-slate-500">
-          Found {data?.pages[0]?.page.total ?? 0} results
-      </div>
+      {includeTotal && typeof total === 'number' && (
+        <div className="text-sm text-slate-500">
+          Found {total} results
+        </div>
+      )}
       {visibleArticles.map((article, index) => (
         <div key={article.article_id}>
           {index === prefetchIndex && (
@@ -246,7 +260,20 @@ export function ResultsList() {
                             </div>
                         </div>
                         <CardDescription>
-                            {article.journal_title} • {article.date}
+                            <span>{article.journal_title}</span>
+                            {(article.volume || article.number) && (
+                              <span>
+                                {' '}
+                                •{' '}
+                                {[
+                                  article.volume && `Vol. ${article.volume}`,
+                                  article.number && `Issue ${article.number}`,
+                                ]
+                                  .filter(Boolean)
+                                  .join(', ')}
+                              </span>
+                            )}
+                            {article.date && <span> • {article.date}</span>}
                         </CardDescription>
                     </CardHeader>
                     <CardContent>
@@ -276,11 +303,11 @@ export function ResultsList() {
                     </DialogTitle>
                     <DialogDescription>
                         {article.journal_title}
-                        {article.date && ` • ${article.date}`}
                         {(article.volume || article.number) && ` • ${[
                             article.volume && `Vol. ${article.volume}`,
                             article.number && `Issue ${article.number}`
                         ].filter(Boolean).join(', ')}`}
+                        {article.date && ` • ${article.date}`}
                     </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-6 py-4">

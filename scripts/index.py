@@ -1004,6 +1004,24 @@ ON CONFLICT(article_id) DO UPDATE SET
 {", ".join(f"{col}=excluded.{col}" for col in ARTICLE_COLUMNS[1:])}
 """
 
+ARTICLE_LISTING_COLUMNS = [
+    "article_id",
+    "journal_id",
+    "issue_id",
+    "publication_year",
+    "date",
+    "open_access",
+    "in_press",
+    "suppressed",
+    "within_library_holdings",
+    "doi",
+    "pmid",
+    "area",
+    "rank",
+]
+
+ARTICLE_LISTING_BATCH_SIZE = 500
+
 
 async def init_db(db: aiosqlite.Connection) -> None:
     """
@@ -1118,6 +1136,42 @@ async def init_db(db: aiosqlite.Connection) -> None:
                 ON DELETE CASCADE,
             FOREIGN KEY (issue_id) REFERENCES issues(issue_id)
                 ON DELETE SET NULL
+        );
+        """,
+    )
+
+    await execute_with_retry(
+        db,
+        """
+        CREATE TABLE IF NOT EXISTS article_listing (
+            article_id INTEGER PRIMARY KEY,
+            journal_id INTEGER NOT NULL,
+            issue_id INTEGER,
+            publication_year INTEGER,
+            date TEXT,
+            open_access INTEGER,
+            in_press INTEGER,
+            suppressed INTEGER,
+            within_library_holdings INTEGER,
+            doi TEXT,
+            pmid TEXT,
+            area TEXT,
+            rank TEXT,
+            FOREIGN KEY (journal_id) REFERENCES journals(journal_id)
+                ON DELETE CASCADE,
+            FOREIGN KEY (issue_id) REFERENCES issues(issue_id)
+                ON DELETE SET NULL
+        );
+        """,
+    )
+
+    await execute_with_retry(
+        db,
+        """
+        CREATE TABLE IF NOT EXISTS listing_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            status TEXT,
+            updated_at TEXT
         );
         """,
     )
@@ -1272,6 +1326,35 @@ async def init_db(db: aiosqlite.Connection) -> None:
         db,
         "CREATE INDEX IF NOT EXISTS idx_articles_within_holdings_date_id "
         "ON articles(within_library_holdings, date, article_id);",
+    )
+
+    await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_article_listing_date_id "
+        "ON article_listing(date, article_id);",
+    )
+    await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_article_listing_area ON article_listing(area);",
+    )
+    await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_article_listing_rank ON article_listing(rank);",
+    )
+    await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_article_listing_publication_year "
+        "ON article_listing(publication_year);",
+    )
+    await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_article_listing_journal "
+        "ON article_listing(journal_id);",
+    )
+    await execute_with_retry(
+        db,
+        "CREATE INDEX IF NOT EXISTS idx_article_listing_issue "
+        "ON article_listing(issue_id);",
     )
 
     await commit_with_retry(db)
@@ -1577,6 +1660,83 @@ async def upsert_article_search(
     )
 
 
+def build_article_listing_upsert(where_sql: str) -> str:
+    """
+    Build the upsert SQL for article listing rows.
+
+    Args:
+        where_sql: WHERE clause string starting with WHERE.
+
+    Returns:
+        SQL statement for inserting listing rows.
+    """
+    return f"""
+    INSERT INTO article_listing ({", ".join(ARTICLE_LISTING_COLUMNS)})
+    SELECT
+        a.article_id,
+        a.journal_id,
+        a.issue_id,
+        i.publication_year,
+        a.date,
+        a.open_access,
+        a.in_press,
+        a.suppressed,
+        a.within_library_holdings,
+        a.doi,
+        a.pmid,
+        m.area,
+        m.rank
+    FROM articles a
+    LEFT JOIN issues i ON i.issue_id = a.issue_id
+    LEFT JOIN journal_meta m ON m.journal_id = a.journal_id
+    {where_sql}
+    ON CONFLICT(article_id) DO UPDATE SET
+    {", ".join(f"{col}=excluded.{col}" for col in ARTICLE_LISTING_COLUMNS[1:])}
+    """
+
+
+async def refresh_article_listing_for_articles(
+    db: DatabaseClient, article_ids: list[int]
+) -> None:
+    """
+    Refresh listing rows for the provided article ids.
+
+    Args:
+        db: Database client.
+        article_ids: Article id list to refresh.
+
+    Returns:
+        None.
+    """
+    if not article_ids:
+        return
+    for batch in chunked(article_ids, ARTICLE_LISTING_BATCH_SIZE):
+        placeholders = ", ".join(["?"] * len(batch))
+        sql = build_article_listing_upsert(f"WHERE a.article_id IN ({placeholders})")
+        await db.execute(sql, tuple(batch))
+
+
+async def refresh_article_listing_for_issues(
+    db: DatabaseClient, issue_ids: list[int]
+) -> None:
+    """
+    Refresh listing rows for the provided issue ids.
+
+    Args:
+        db: Database client.
+        issue_ids: Issue id list to refresh.
+
+    Returns:
+        None.
+    """
+    if not issue_ids:
+        return
+    for batch in chunked(issue_ids, ARTICLE_LISTING_BATCH_SIZE):
+        placeholders = ", ".join(["?"] * len(batch))
+        sql = build_article_listing_upsert(f"WHERE a.issue_id IN ({placeholders})")
+        await db.execute(sql, tuple(batch))
+
+
 async def get_issue_ids_with_articles(
     db: DatabaseClient, journal_id: int, year: int
 ) -> set[int]:
@@ -1686,6 +1846,31 @@ async def mark_journal_done(db: DatabaseClient, journal_id: int) -> None:
         """,
         (journal_id, timestamp),
     )
+
+
+async def mark_listing_ready(db: aiosqlite.Connection) -> None:
+    """
+    Mark the article listing as ready for query use.
+
+    Args:
+        db: Database client.
+
+    Returns:
+        None.
+    """
+    timestamp = datetime.utcnow().isoformat()
+    await execute_with_retry(
+        db,
+        """
+        INSERT INTO listing_state (id, status, updated_at)
+        VALUES (1, 'ready', ?)
+        ON CONFLICT(id) DO UPDATE SET
+            status = excluded.status,
+            updated_at = excluded.updated_at
+        """,
+        (timestamp,),
+    )
+    await commit_with_retry(db)
 
 
 async def fetch_issue_articles(
@@ -1806,6 +1991,8 @@ async def process_journal(
 
         if issue_records:
             await upsert_issues(db, issue_records)
+        if update and issue_ids:
+            await refresh_article_listing_for_issues(db, issue_ids)
 
         issue_ids_to_fetch = issue_ids
         if update and issue_ids:
@@ -1838,6 +2025,10 @@ async def process_journal(
                 if batch_records:
                     await upsert_articles(db, batch_records)
                     await upsert_article_search(db, batch_records, journal_title)
+                    batch_article_ids = list(
+                        {record["article_id"] for record in batch_records}
+                    )
+                    await refresh_article_listing_for_articles(db, batch_article_ids)
 
         if progress:
             progress.update(1)
@@ -1856,6 +2047,10 @@ async def process_journal(
                 in_press_records.append(record)
         await upsert_articles(db, in_press_records)
         await upsert_article_search(db, in_press_records, journal_title)
+        in_press_article_ids = list(
+            {record["article_id"] for record in in_press_records}
+        )
+        await refresh_article_listing_for_articles(db, in_press_article_ids)
         await db.commit()
 
     await mark_journal_done(db, journal_id)
@@ -2157,6 +2352,8 @@ async def export_csv(
             finally:
                 await local_db.close()
                 await optimize_db(db)
+                if not update:
+                    await mark_listing_ready(db)
                 await client.aclose()
         return
 
@@ -2216,6 +2413,8 @@ async def export_csv(
 
     async with aiosqlite.connect(db_path, timeout=DB_TIMEOUT_SECONDS) as db:
         await optimize_db(db)
+        if not update:
+            await mark_listing_ready(db)
 
 
 async def async_main(args: argparse.Namespace) -> None:

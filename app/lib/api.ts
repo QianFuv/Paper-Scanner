@@ -92,9 +92,10 @@ export async function getDatabases(): Promise<string[]> {
 export async function getArticles(
   params: URLSearchParams,
   pageParam: string | number | null = null,
+  includeTotal: boolean = false,
 ): Promise<ArticlePage> {
   const newParams = new URLSearchParams(params);
-  const includeTotal = pageParam === null || pageParam === 0;
+  const shouldIncludeTotal = includeTotal && (pageParam === null || pageParam === 0);
 
   if (typeof pageParam === 'string' && pageParam.length > 0) {
     newParams.set('cursor', pageParam);
@@ -102,7 +103,7 @@ export async function getArticles(
   } else if (typeof pageParam === 'number') {
     newParams.set('offset', pageParam.toString());
   }
-  newParams.set('include_total', includeTotal ? '1' : '0');
+  newParams.set('include_total', shouldIncludeTotal ? '1' : '0');
 
   const res = await fetch(withDb('/articles', newParams));
   if (!res.ok) {

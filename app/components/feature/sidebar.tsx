@@ -29,6 +29,18 @@ export function Sidebar({ className }: { className?: string }) {
     queryFn: getDatabases,
   });
 
+  useEffect(() => {
+    if (!databases || databases.length === 0) {
+      return;
+    }
+    if (databases.includes(selectedDb)) {
+      return;
+    }
+    const fallback = databases[0];
+    setDatabase(fallback);
+    setSelectedDb(fallback);
+  }, [databases, selectedDb]);
+
   const { data: areaOptions, isLoading: loadingAreas } = useQuery({
     queryKey: ['meta', 'areas', selectedDb],
     queryFn: getAreas,
@@ -98,8 +110,10 @@ export function Sidebar({ className }: { className?: string }) {
   };
 
   const handleYearCommit = (value: number[]) => {
-      setYearMin(value[0]);
-      setYearMax(value[1]);
+      const nextMin = value[0] === minYearAvailable ? null : value[0];
+      const nextMax = value[1] === maxYearAvailable ? null : value[1];
+      setYearMin(nextMin);
+      setYearMax(nextMax);
   };
 
   return (
@@ -152,8 +166,19 @@ export function Sidebar({ className }: { className?: string }) {
         </div>
 
         <div className="space-y-4">
-          <h3 className="font-semibold text-sm text-foreground">Journal Metrics</h3>
-          
+          <div className="flex items-center justify-between">
+            <h3 className="font-semibold text-sm text-foreground">Journal Metrics</h3>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleClearFilters}
+              className="h-6 px-2 text-xs"
+              title="Clear all filters"
+            >
+              Clear
+            </Button>
+          </div>
+
           <div className="space-y-3">
               <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Areas</h4>
               {loadingAreas ? (

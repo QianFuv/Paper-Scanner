@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,7 @@ import httpx
 DEFAULT_LIBRARY_ID = "3050"
 FALLBACK_LIBRARIES = ["215", "866", "72", "853", "554", "371", "230"]
 TOKEN_EXPIRY_BUFFER = 300
+SQLITE_PARAM_LIMIT = 900
 
 
 class BrowZineAPIClient:
@@ -579,13 +581,16 @@ async def validate_journal(
     return False, "No accessible content in any library", None, None
 
 
-async def validate_and_filter_csv(client: BrowZineAPIClient, csv_path: Path) -> None:
+async def validate_and_filter_csv(
+    client: BrowZineAPIClient, csv_path: Path, index_dir: Path
+) -> None:
     """
     Validate journals in CSV and remove inaccessible ones.
 
     Args:
         client: BrowZine API client instance.
         csv_path: Path to CSV file.
+        index_dir: Directory containing SQLite index databases.
 
     Returns:
         None.
@@ -602,6 +607,8 @@ async def validate_and_filter_csv(client: BrowZineAPIClient, csv_path: Path) -> 
     initial_count = len(rows)
     valid_rows: list[dict[str, str]] = []
     removed_count = 0
+
+    db_path = index_dir / f"{csv_path.stem}.sqlite"
 
     for i, row in enumerate(rows, start=1):
         journal_id = row.get("id")
@@ -626,6 +633,20 @@ async def validate_and_filter_csv(client: BrowZineAPIClient, csv_path: Path) -> 
 
         if is_valid:
             if working_lib and working_id:
+                if working_lib != lib_id or working_id != journal_id:
+                    try:
+                        journal_id_int = int(journal_id)
+                    except ValueError:
+                        journal_id_int = None
+                    if journal_id_int is not None:
+                        removed = await cleanup_journal_data_async(
+                            db_path, journal_id_int
+                        )
+                        if removed:
+                            print(
+                                f"    - Cleaned database for journal {journal_id} "
+                                f"(removed {removed})"
+                            )
                 if working_lib != lib_id or working_id != journal_id:
                     row["library"] = working_lib
                     row["id"] = working_id
@@ -674,6 +695,141 @@ def select_csv_files(data_meta_dir: Path, filename: str | None) -> list[Path]:
     return sorted(data_meta_dir.glob("*.csv"))
 
 
+def resolve_index_db_path(csv_path: Path) -> Path:
+    """
+    Resolve the index database path for a CSV file.
+
+    Args:
+        csv_path: Path to the metadata CSV.
+
+    Returns:
+        Path to the SQLite index database.
+    """
+    project_root = Path(__file__).parent.parent.parent
+    index_dir = project_root / "data" / "index"
+    return index_dir / f"{csv_path.stem}.sqlite"
+
+
+def chunked_ids(items: list[int], size: int) -> list[list[int]]:
+    """
+    Split a list of IDs into fixed-size chunks.
+
+    Args:
+        items: List of IDs.
+        size: Chunk size.
+
+    Returns:
+        List of ID chunks.
+    """
+    if size <= 0:
+        size = 1
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+def safe_execute(cur: sqlite3.Cursor, sql: str, params: tuple[Any, ...]) -> int:
+    """
+    Execute a SQL statement and return affected row count.
+
+    Args:
+        cur: SQLite cursor.
+        sql: SQL statement.
+        params: SQL parameters.
+
+    Returns:
+        Number of affected rows.
+    """
+    try:
+        cur.execute(sql, params)
+        return cur.rowcount
+    except sqlite3.OperationalError:
+        return 0
+
+
+def cleanup_journal_data(db_path: Path, journal_id: int) -> dict[str, int]:
+    """
+    Remove all stored data for a journal from the index database.
+
+    Args:
+        db_path: SQLite database path.
+        journal_id: Journal ID to remove.
+
+    Returns:
+        Dictionary of removed row counts.
+    """
+    if not db_path.exists():
+        return {}
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys=ON;")
+    cur = conn.cursor()
+    article_ids = [
+        row[0]
+        for row in cur.execute(
+            "SELECT article_id FROM articles WHERE journal_id = ?",
+            (journal_id,),
+        ).fetchall()
+    ]
+    removed = {
+        "article_search": 0,
+        "article_listing": 0,
+        "articles": 0,
+        "issues": 0,
+        "journal_year_state": 0,
+        "journal_state": 0,
+        "journal_meta": 0,
+        "journals": 0,
+    }
+
+    if article_ids:
+        for batch in chunked_ids(article_ids, SQLITE_PARAM_LIMIT):
+            placeholders = ", ".join(["?"] * len(batch))
+            removed["article_search"] += safe_execute(
+                cur,
+                f"DELETE FROM article_search WHERE rowid IN ({placeholders})",
+                tuple(batch),
+            )
+
+    removed["article_listing"] = safe_execute(
+        cur,
+        "DELETE FROM article_listing WHERE journal_id = ?",
+        (journal_id,),
+    )
+    removed["articles"] = safe_execute(
+        cur, "DELETE FROM articles WHERE journal_id = ?", (journal_id,)
+    )
+    removed["issues"] = safe_execute(
+        cur, "DELETE FROM issues WHERE journal_id = ?", (journal_id,)
+    )
+    removed["journal_year_state"] = safe_execute(
+        cur, "DELETE FROM journal_year_state WHERE journal_id = ?", (journal_id,)
+    )
+    removed["journal_state"] = safe_execute(
+        cur, "DELETE FROM journal_state WHERE journal_id = ?", (journal_id,)
+    )
+    removed["journal_meta"] = safe_execute(
+        cur, "DELETE FROM journal_meta WHERE journal_id = ?", (journal_id,)
+    )
+    removed["journals"] = safe_execute(
+        cur, "DELETE FROM journals WHERE journal_id = ?", (journal_id,)
+    )
+    conn.commit()
+    conn.close()
+    return removed
+
+
+async def cleanup_journal_data_async(db_path: Path, journal_id: int) -> dict[str, int]:
+    """
+    Run journal cleanup in a background thread.
+
+    Args:
+        db_path: SQLite database path.
+        journal_id: Journal ID to remove.
+
+    Returns:
+        Dictionary of removed row counts.
+    """
+    return await asyncio.to_thread(cleanup_journal_data, db_path, journal_id)
+
+
 async def async_main(args: argparse.Namespace) -> None:
     """
     Async entrypoint for metadata workflow.
@@ -686,6 +842,8 @@ async def async_main(args: argparse.Namespace) -> None:
     """
     project_root = Path(__file__).parent.parent.parent
     data_meta_dir = project_root / "data" / "meta"
+    index_dir = project_root / "data" / "index"
+    index_dir.mkdir(parents=True, exist_ok=True)
 
     if not data_meta_dir.exists():
         print(f"✗ Directory not found: {data_meta_dir}")
@@ -712,7 +870,7 @@ async def async_main(args: argparse.Namespace) -> None:
         if args.mode in {"validate", "both"}:
             print("\nRunning validation workflow...\n")
             for csv_file in csv_files:
-                await validate_and_filter_csv(client, csv_file)
+                await validate_and_filter_csv(client, csv_file, index_dir)
     finally:
         await client.aclose()
 

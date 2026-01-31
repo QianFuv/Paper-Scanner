@@ -10,7 +10,10 @@ export default function Home() {
         <div className="p-6 border-b bg-background/95 backdrop-blur z-10 sticky top-0">
           <SearchBar className="max-w-4xl mx-auto" />
         </div>
-        <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
+        <div
+          id="results-scroll-container"
+          className="flex-1 overflow-y-auto p-6 scroll-smooth"
+        >
           <div className="max-w-4xl mx-auto w-full">
             <ResultsList />
           </div>
