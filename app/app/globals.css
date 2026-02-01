@@ -1,3 +1,4 @@
+@import "../assets/MapleMonoNormalNL-CN-Regular/result.css";
 @import "tailwindcss";
 @plugin "tailwindcss-animate";
 
@@ -121,5 +122,12 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: "Maple Mono Normal NL CN", var(--font-geist-sans), monospace;
+  }
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: "Maple Mono Normal NL CN", var(--font-geist-mono), monospace;
   }
 }

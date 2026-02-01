@@ -165,22 +165,22 @@ export function SearchBar({ className }: { className?: string }) {
             <div className="space-y-2">
               <div className="text-foreground/80 font-medium">基础</div>
               <ul className="space-y-1 text-muted-foreground">
-                <li><code className="font-mono">term1 AND term2</code> 同时包含两个词</li>
-                <li><code className="font-mono">term1 OR term2</code> 任意一个词</li>
-                <li><code className="font-mono">term1 NOT term2</code> 排除 term2</li>
-                <li><code className="font-mono">"exact phrase"</code> 精确短语</li>
-                <li><code className="font-mono">bio*</code> 前缀匹配</li>
+                <li><code>term1 AND term2</code> 同时包含两个词</li>
+                <li><code>term1 OR term2</code> 任意一个词</li>
+                <li><code>term1 NOT term2</code> 排除 term2</li>
+                <li><code>"exact phrase"</code> 精确短语</li>
+                <li><code>bio*</code> 前缀匹配</li>
               </ul>
             </div>
             <div className="space-y-2">
               <div className="text-foreground/80 font-medium">高级</div>
               <ul className="space-y-1 text-muted-foreground">
-                <li><code className="font-mono">NEAR("gene expression" therapy, 5)</code> 距离 5 词以内</li>
-                <li><code className="font-mono">title:diabetes</code> 指定字段</li>
-                <li><code className="font-mono">{'{title abstract}:imaging'}</code> 多字段</li>
-                <li><code className="font-mono">authors:"Smith"</code> 作者</li>
-                <li><code className="font-mono">journal_title:"Nature"</code> 期刊</li>
-                <li><code className="font-mono">^introduction</code> 列开头匹配</li>
+                <li><code>NEAR("gene expression" therapy, 5)</code> 距离 5 词以内</li>
+                <li><code>title:diabetes</code> 指定字段</li>
+                <li><code>{'{title abstract}:imaging'}</code> 多字段</li>
+                <li><code>authors:"Smith"</code> 作者</li>
+                <li><code>journal_title:"Nature"</code> 期刊</li>
+                <li><code>^introduction</code> 列开头匹配</li>
               </ul>
             </div>
             <div className="text-muted-foreground">

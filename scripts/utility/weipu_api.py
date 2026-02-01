@@ -26,6 +26,8 @@ from selectolax.parser import HTMLParser
 BASE_URL = "https://www.cqvip.com"
 API_BASE_URL = "https://www.cqvip.com/newsite"
 DEFAULT_TIMEOUT = 20.0
+DEFAULT_RETRY_ATTEMPTS = 3
+DEFAULT_RETRY_BASE_DELAY = 0.75
 DEFAULT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -716,6 +718,52 @@ class WeipuAPISelectolax:
         self._uuid: str | None = None
         self._env: str | None = None
         self._server_time_offset_ms: int | None = None
+        self._retry_attempts = DEFAULT_RETRY_ATTEMPTS
+        self._retry_base_delay = DEFAULT_RETRY_BASE_DELAY
+
+    async def _sleep_backoff(self, attempt: int) -> None:
+        """
+        Sleep for an exponential backoff interval.
+
+        Args:
+            attempt: Retry attempt index starting at 0.
+
+        Returns:
+            None.
+        """
+        delay = self._retry_base_delay * (2**attempt)
+        await asyncio.sleep(delay)
+
+    async def _request_with_retry(
+        self, method: str, url: str, **kwargs: Any
+    ) -> httpx.Response | None:
+        """
+        Send an HTTP request with retries on transient failures.
+
+        Args:
+            method: HTTP method.
+            url: Target URL.
+            kwargs: Additional httpx request arguments.
+
+        Returns:
+            httpx.Response or None when all retries fail.
+        """
+        for attempt in range(self._retry_attempts):
+            try:
+                response = await self._client.request(method, url, **kwargs)
+            except httpx.RequestError:
+                response = None
+            if response is None:
+                await self._sleep_backoff(attempt)
+                continue
+            if (
+                response.status_code in {429, 500, 502, 503, 504}
+                and attempt < self._retry_attempts - 1
+            ):
+                await self._sleep_backoff(attempt)
+                continue
+            return response
+        return None
 
     async def __aenter__(self) -> WeipuAPISelectolax:
         """
@@ -900,11 +948,10 @@ console.log(enc.toString('hex'));
         if headers is None:
             return None
         url = f"{API_BASE_URL}{path}"
-        try:
-            response = await self._client.post(url, headers=headers, json=payload)
-        except httpx.RequestError:
-            return None
-        if response.status_code != 200:
+        response = await self._request_with_retry(
+            "POST", url, headers=headers, json=payload
+        )
+        if response is None or response.status_code != 200:
             return None
         try:
             data = response.json()
@@ -967,11 +1014,8 @@ console.log(enc.toString('hex'));
         Returns:
             Tuple of (html, payload) or None.
         """
-        try:
-            response = await self._client.get(url)
-        except httpx.RequestError:
-            return None
-        if response.status_code != 200:
+        response = await self._request_with_retry("GET", url)
+        if response is None or response.status_code != 200:
             return None
         html_text = response.text
         script = self.extract_nuxt_script(html_text)
@@ -992,11 +1036,8 @@ console.log(enc.toString('hex'));
         Returns:
             HTML string or None.
         """
-        try:
-            response = await self._client.get(url)
-        except httpx.RequestError:
-            return None
-        if response.status_code != 200:
+        response = await self._request_with_retry("GET", url)
+        if response is None or response.status_code != 200:
             return None
         return response.text
 
@@ -1333,11 +1374,8 @@ console.log(enc.toString('hex'));
         Returns:
             Parsed payload dictionary or None.
         """
-        try:
-            response = await self._client.get(url)
-        except httpx.RequestError:
-            return None
-        if response.status_code != 200:
+        response = await self._request_with_retry("GET", url)
+        if response is None or response.status_code != 200:
             return None
         script = self.extract_nuxt_script(response.text)
         if not script:

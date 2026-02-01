@@ -31,7 +31,7 @@ export default function ArticlePage() {
 
   if (isLoading) {
       return (
-          <div className="container mx-auto p-6 max-w-4xl space-y-6">
+          <div className="mx-auto w-full max-w-4xl px-4 sm:px-6 py-6 space-y-6">
                <Skeleton className="h-8 w-1/4" />
                <Skeleton className="h-64 w-full" />
           </div>
@@ -49,7 +49,7 @@ export default function ArticlePage() {
   if (!article) return null;
 
   return (
-    <div className="container mx-auto p-6 max-w-4xl">
+    <div className="mx-auto w-full max-w-4xl px-4 sm:px-6 py-6">
       <Button 
         variant="ghost" 
         className="mb-4 pl-0 hover:pl-0 hover:bg-transparent text-slate-500 hover:text-slate-900 dark:hover:text-slate-100"

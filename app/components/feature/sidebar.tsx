@@ -117,7 +117,7 @@ export function Sidebar({ className }: { className?: string }) {
   };
 
   return (
-    <aside className={cn("w-64 flex flex-col h-full border-r bg-background", className)}>
+    <aside className={cn("w-[19.2rem] flex flex-col h-full border-r bg-background", className)}>
       <div className="flex-1 space-y-8 p-6 overflow-y-auto">
 
         <div className="space-y-4">

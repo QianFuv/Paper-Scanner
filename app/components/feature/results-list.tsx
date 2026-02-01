@@ -286,7 +286,7 @@ export function ResultsList() {
                     </Card>
                 </div>
             </DialogTrigger>
-            <DialogContent className="w-full max-w-4xl max-h-[90vh] overflow-y-auto [&>button]:hidden">
+            <DialogContent className="w-[calc(100%-2rem)] max-w-[calc(100%-2rem)] md:max-w-4xl max-h-[90vh] overflow-y-auto [&>button]:hidden">
                 <DialogHeader>
                     <DialogTitle className="text-xl leading-snug">
                         {article.title}
