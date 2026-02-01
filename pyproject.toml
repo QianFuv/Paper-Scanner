@@ -9,6 +9,7 @@ dependencies = [
     "fastapi>=0.128.0",
     "httpx>=0.28.1",
     "playwright>=1.57.0",
+    "selectolax>=0.4.6",
     "tqdm>=4.67.1",
     "uvicorn>=0.40.0",
 ]
@@ -20,8 +21,7 @@ dev = [
 ]
 
 [project.scripts]
-fill = "scripts.utility.fill:main"
-valid = "scripts.utility.valid:main"
+metadata = "scripts.utility.metadata:main"
 index = "scripts.index:main"
 api = "scripts.api:main"
 

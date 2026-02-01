@@ -8,9 +8,10 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { ExternalLink, ArrowLeft } from 'lucide-react';
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const DEFAULT_DB = 'utd24.sqlite';
+
 async function getArticle(id: string) {
-    const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-    const DEFAULT_DB = 'utd24.sqlite';
     const res = await fetch(`${API_BASE_URL}/articles/${id}?db=${DEFAULT_DB}`);
     if (!res.ok) {
         throw new Error('Failed to fetch article');

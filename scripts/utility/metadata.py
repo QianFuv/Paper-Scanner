@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
-import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
@@ -20,10 +19,25 @@ from typing import Any
 
 import httpx
 
+from scripts.utility.weipu_api import WeipuAPISelectolax
+
 DEFAULT_LIBRARY_ID = "3050"
+WEIPU_LIBRARY_ID = "-1"
 FALLBACK_LIBRARIES = ["215", "866", "72", "853", "554", "371", "230"]
 TOKEN_EXPIRY_BUFFER = 300
-SQLITE_PARAM_LIMIT = 900
+
+
+def is_weipu_library(value: str | None) -> bool:
+    """
+    Determine whether a library identifier indicates WeiPu usage.
+
+    Args:
+        value: Library identifier value.
+
+    Returns:
+        True when the identifier matches the WeiPu sentinel.
+    """
+    return (value or "").strip() == WEIPU_LIBRARY_ID
 
 
 class BrowZineAPIClient:
@@ -358,12 +372,17 @@ def write_csv_rows(csv_path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
-async def fill_issn_by_id(client: BrowZineAPIClient, csv_path: Path) -> None:
+async def fill_issn_by_id(
+    client: BrowZineAPIClient,
+    weipu_client: WeipuAPISelectolax,
+    csv_path: Path,
+) -> None:
     """
     Fill ISSN field using existing journal IDs.
 
     Args:
         client: BrowZine API client instance.
+        weipu_client: WeiPu API client instance.
         csv_path: Path to CSV file.
 
     Returns:
@@ -382,6 +401,22 @@ async def fill_issn_by_id(client: BrowZineAPIClient, csv_path: Path) -> None:
             journal_id = row["id"]
             title = row.get("title", "Unknown")
             lib_id = row.get("library", DEFAULT_LIBRARY_ID)
+
+            if is_weipu_library(lib_id):
+                print(
+                    f"  [{i}/{len(rows)}] Fetching WeiPu ISSN for {title} "
+                    f"(ID: {journal_id})..."
+                )
+                details = await weipu_client.get_journal_details(journal_id)
+                issn = details.get("issn") if details else None
+                if issn:
+                    row["issn"] = issn
+                    updated_count += 1
+                    print(f"    ✓ Found ISSN: {issn}")
+                else:
+                    print("    ✗ ISSN not found")
+                await asyncio.sleep(0.5)
+                continue
 
             print(
                 f"  [{i}/{len(rows)}] Fetching ISSN for {title} "
@@ -407,12 +442,17 @@ async def fill_issn_by_id(client: BrowZineAPIClient, csv_path: Path) -> None:
     print(f"  Updated {updated_count} ISSNs")
 
 
-async def fill_id_by_issn(client: BrowZineAPIClient, csv_path: Path) -> None:
+async def fill_id_by_issn(
+    client: BrowZineAPIClient,
+    weipu_client: WeipuAPISelectolax,
+    csv_path: Path,
+) -> None:
     """
     Fill journal ID field using existing ISSNs.
 
     Args:
         client: BrowZine API client instance.
+        weipu_client: WeiPu API client instance.
         csv_path: Path to CSV file.
 
     Returns:
@@ -430,16 +470,37 @@ async def fill_id_by_issn(client: BrowZineAPIClient, csv_path: Path) -> None:
         if row.get("issn") and not row.get("id"):
             issn = row["issn"]
             title = row.get("title", "Unknown")
+            lib_id = row.get("library", DEFAULT_LIBRARY_ID)
+
+            if is_weipu_library(lib_id):
+                print(
+                    f"  [{i}/{len(rows)}] Searching WeiPu for {title} (ISSN: {issn})..."
+                )
+                journal = await weipu_client.search_journal_by_issn(issn)
+                journal_id = journal.get("journalId") if journal else None
+                if not journal_id and title:
+                    journal = await weipu_client.search_journal_by_title(title)
+                    journal_id = journal.get("journalId") if journal else None
+                if journal_id:
+                    row["id"] = str(journal_id)
+                    row["library"] = WEIPU_LIBRARY_ID
+                    updated_count += 1
+                    print(f"    ✓ Found WeiPu ID: {journal_id}")
+                else:
+                    print("    ✗ Journal not found in WeiPu")
+                await asyncio.sleep(0.5)
+                continue
+
             print(f"  [{i}/{len(rows)}] Searching for {title} (ISSN: {issn})...")
 
-            journal, lib_id = await client.search_by_issn(issn, try_fallback=True)
-            if journal and lib_id:
+            journal, found_lib_id = await client.search_by_issn(issn, try_fallback=True)
+            if journal and found_lib_id:
                 journal_id = journal.get("id")
                 if journal_id:
                     row["id"] = str(int(journal_id))
-                    row["library"] = lib_id
+                    row["library"] = found_lib_id
                     updated_count += 1
-                    print(f"    ✓ Found ID: {journal_id} (Lib: {lib_id})")
+                    print(f"    ✓ Found ID: {journal_id} (Lib: {found_lib_id})")
                 else:
                     print("    ✗ ID not found in response")
             else:
@@ -451,12 +512,17 @@ async def fill_id_by_issn(client: BrowZineAPIClient, csv_path: Path) -> None:
     print(f"  Updated {updated_count} journal IDs")
 
 
-async def process_fill_csv(client: BrowZineAPIClient, csv_path: Path) -> None:
+async def process_fill_csv(
+    client: BrowZineAPIClient,
+    weipu_client: WeipuAPISelectolax,
+    csv_path: Path,
+) -> None:
     """
     Process a single CSV file to fill missing metadata.
 
     Args:
         client: BrowZine API client instance.
+        weipu_client: WeiPu API client instance.
         csv_path: Path to CSV file.
 
     Returns:
@@ -484,10 +550,10 @@ async def process_fill_csv(client: BrowZineAPIClient, csv_path: Path) -> None:
     )
 
     if has_missing_issn:
-        await fill_issn_by_id(client, csv_path)
+        await fill_issn_by_id(client, weipu_client, csv_path)
 
     if has_missing_id:
-        await fill_id_by_issn(client, csv_path)
+        await fill_id_by_issn(client, weipu_client, csv_path)
 
     if not has_missing_issn and not has_missing_id:
         print(f"  ✓ {csv_path.name}: All metadata already complete")
@@ -581,16 +647,84 @@ async def validate_journal(
     return False, "No accessible content in any library", None, None
 
 
+async def validate_weipu_journal(
+    client: WeipuAPISelectolax,
+    journal_id: str,
+    issn: str,
+    title: str,
+) -> tuple[bool, str, str | None, str | None]:
+    """
+    Validate that a WeiPu journal has accessible issues and articles.
+
+    Args:
+        client: WeiPu API client instance.
+        journal_id: WeiPu journal ID.
+        issn: Journal ISSN for fallback search.
+        title: Journal title for fallback search.
+
+    Returns:
+        Tuple of (is_valid, reason, working_library_id, working_journal_id).
+    """
+    resolved_id = journal_id
+    details = await client.get_journal_details(resolved_id) if resolved_id else None
+    if not details and issn:
+        journal = await client.search_journal_by_issn(issn)
+        if journal and journal.get("journalId"):
+            resolved_id = str(journal["journalId"])
+            details = await client.get_journal_details(resolved_id)
+
+    if not details and title:
+        journal = await client.search_journal_by_title(title)
+        if journal and journal.get("journalId"):
+            resolved_id = str(journal["journalId"])
+            details = await client.get_journal_details(resolved_id)
+
+    if not details:
+        return False, "Journal not found", None, None
+
+    years = details.get("years") or []
+    if not years:
+        return False, "No issues found", None, None
+
+    years_sorted = sorted(
+        [year for year in years if isinstance(year.get("year"), int)],
+        key=lambda year: year["year"],
+        reverse=True,
+    )
+    latest_issue = None
+    for year in years_sorted:
+        issues = year.get("issues") or []
+        if issues:
+            latest_issue = issues[0]
+            break
+
+    if not latest_issue:
+        return False, "No issues found", None, None
+
+    issue_id = latest_issue.get("id")
+    if not issue_id:
+        return False, "Issue has no ID", None, None
+
+    issue_payload = await client.get_issue_articles(resolved_id, str(issue_id))
+    articles = issue_payload.get("articles") if issue_payload else None
+    if not articles:
+        return False, "No articles found in current issue", None, None
+
+    return True, "Valid", WEIPU_LIBRARY_ID, resolved_id
+
+
 async def validate_and_filter_csv(
-    client: BrowZineAPIClient, csv_path: Path, index_dir: Path
+    client: BrowZineAPIClient,
+    weipu_client: WeipuAPISelectolax,
+    csv_path: Path,
 ) -> None:
     """
     Validate journals in CSV and remove inaccessible ones.
 
     Args:
         client: BrowZine API client instance.
+        weipu_client: WeiPu API client instance.
         csv_path: Path to CSV file.
-        index_dir: Directory containing SQLite index databases.
 
     Returns:
         None.
@@ -608,45 +742,41 @@ async def validate_and_filter_csv(
     valid_rows: list[dict[str, str]] = []
     removed_count = 0
 
-    db_path = index_dir / f"{csv_path.stem}.sqlite"
-
     for i, row in enumerate(rows, start=1):
         journal_id = row.get("id")
-        if not journal_id:
-            title = row.get("title", "Unknown")
+        title = row.get("title", "Unknown")
+        issn = row.get("issn", "")
+        lib_id = row.get("library", DEFAULT_LIBRARY_ID)
+        is_weipu = is_weipu_library(lib_id)
+
+        if not journal_id and not (is_weipu and issn):
             print(f"  [{i}/{len(rows)}] ✗ {title}: No journal ID - REMOVED")
             removed_count += 1
             continue
 
-        title = row.get("title", "Unknown")
-        issn = row.get("issn", "")
-        lib_id = row.get("library", DEFAULT_LIBRARY_ID)
+        display_id = journal_id or "N/A"
 
         print(
             f"  [{i}/{len(rows)}] Validating {title} "
-            f"(ID: {journal_id}, Lib: {lib_id})..."
+            f"(ID: {display_id}, Lib: {lib_id})..."
         )
 
-        is_valid, reason, working_lib, working_id = await validate_journal(
-            client, journal_id, issn, lib_id
-        )
+        if is_weipu:
+            is_valid, reason, working_lib, working_id = await validate_weipu_journal(
+                weipu_client, journal_id or "", issn, title
+            )
+        else:
+            if not journal_id:
+                removed_count += 1
+                print("    ✗ REMOVED - Missing journal ID")
+                await asyncio.sleep(0.5)
+                continue
+            is_valid, reason, working_lib, working_id = await validate_journal(
+                client, journal_id, issn, lib_id
+            )
 
         if is_valid:
             if working_lib and working_id:
-                if working_lib != lib_id or working_id != journal_id:
-                    try:
-                        journal_id_int = int(journal_id)
-                    except ValueError:
-                        journal_id_int = None
-                    if journal_id_int is not None:
-                        removed = await cleanup_journal_data_async(
-                            db_path, journal_id_int
-                        )
-                        if removed:
-                            print(
-                                f"    - Cleaned database for journal {journal_id} "
-                                f"(removed {removed})"
-                            )
                 if working_lib != lib_id or working_id != journal_id:
                     row["library"] = working_lib
                     row["id"] = working_id
@@ -710,126 +840,6 @@ def resolve_index_db_path(csv_path: Path) -> Path:
     return index_dir / f"{csv_path.stem}.sqlite"
 
 
-def chunked_ids(items: list[int], size: int) -> list[list[int]]:
-    """
-    Split a list of IDs into fixed-size chunks.
-
-    Args:
-        items: List of IDs.
-        size: Chunk size.
-
-    Returns:
-        List of ID chunks.
-    """
-    if size <= 0:
-        size = 1
-    return [items[i : i + size] for i in range(0, len(items), size)]
-
-
-def safe_execute(cur: sqlite3.Cursor, sql: str, params: tuple[Any, ...]) -> int:
-    """
-    Execute a SQL statement and return affected row count.
-
-    Args:
-        cur: SQLite cursor.
-        sql: SQL statement.
-        params: SQL parameters.
-
-    Returns:
-        Number of affected rows.
-    """
-    try:
-        cur.execute(sql, params)
-        return cur.rowcount
-    except sqlite3.OperationalError:
-        return 0
-
-
-def cleanup_journal_data(db_path: Path, journal_id: int) -> dict[str, int]:
-    """
-    Remove all stored data for a journal from the index database.
-
-    Args:
-        db_path: SQLite database path.
-        journal_id: Journal ID to remove.
-
-    Returns:
-        Dictionary of removed row counts.
-    """
-    if not db_path.exists():
-        return {}
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA foreign_keys=ON;")
-    cur = conn.cursor()
-    article_ids = [
-        row[0]
-        for row in cur.execute(
-            "SELECT article_id FROM articles WHERE journal_id = ?",
-            (journal_id,),
-        ).fetchall()
-    ]
-    removed = {
-        "article_search": 0,
-        "article_listing": 0,
-        "articles": 0,
-        "issues": 0,
-        "journal_year_state": 0,
-        "journal_state": 0,
-        "journal_meta": 0,
-        "journals": 0,
-    }
-
-    if article_ids:
-        for batch in chunked_ids(article_ids, SQLITE_PARAM_LIMIT):
-            placeholders = ", ".join(["?"] * len(batch))
-            removed["article_search"] += safe_execute(
-                cur,
-                f"DELETE FROM article_search WHERE rowid IN ({placeholders})",
-                tuple(batch),
-            )
-
-    removed["article_listing"] = safe_execute(
-        cur,
-        "DELETE FROM article_listing WHERE journal_id = ?",
-        (journal_id,),
-    )
-    removed["articles"] = safe_execute(
-        cur, "DELETE FROM articles WHERE journal_id = ?", (journal_id,)
-    )
-    removed["issues"] = safe_execute(
-        cur, "DELETE FROM issues WHERE journal_id = ?", (journal_id,)
-    )
-    removed["journal_year_state"] = safe_execute(
-        cur, "DELETE FROM journal_year_state WHERE journal_id = ?", (journal_id,)
-    )
-    removed["journal_state"] = safe_execute(
-        cur, "DELETE FROM journal_state WHERE journal_id = ?", (journal_id,)
-    )
-    removed["journal_meta"] = safe_execute(
-        cur, "DELETE FROM journal_meta WHERE journal_id = ?", (journal_id,)
-    )
-    removed["journals"] = safe_execute(
-        cur, "DELETE FROM journals WHERE journal_id = ?", (journal_id,)
-    )
-    conn.commit()
-    conn.close()
-    return removed
-
-
-async def cleanup_journal_data_async(db_path: Path, journal_id: int) -> dict[str, int]:
-    """
-    Run journal cleanup in a background thread.
-
-    Args:
-        db_path: SQLite database path.
-        journal_id: Journal ID to remove.
-
-    Returns:
-        Dictionary of removed row counts.
-    """
-    return await asyncio.to_thread(cleanup_journal_data, db_path, journal_id)
-
-
 async def async_main(args: argparse.Namespace) -> None:
     """
     Async entrypoint for metadata workflow.
@@ -855,6 +865,7 @@ async def async_main(args: argparse.Namespace) -> None:
         return
 
     client = BrowZineAPIClient(library_id=DEFAULT_LIBRARY_ID, timeout=args.timeout)
+    weipu_client = WeipuAPISelectolax(timeout=args.timeout)
 
     print("=" * 60)
     print("BrowZine Journal Metadata Tool")
@@ -865,14 +876,15 @@ async def async_main(args: argparse.Namespace) -> None:
         if args.mode in {"fill", "both"}:
             print("\nRunning fill workflow...\n")
             for csv_file in csv_files:
-                await process_fill_csv(client, csv_file)
+                await process_fill_csv(client, weipu_client, csv_file)
 
         if args.mode in {"validate", "both"}:
             print("\nRunning validation workflow...\n")
             for csv_file in csv_files:
-                await validate_and_filter_csv(client, csv_file, index_dir)
+                await validate_and_filter_csv(client, weipu_client, csv_file)
     finally:
         await client.aclose()
+        await weipu_client.aclose()
 
     print("\n" + "=" * 60)
     print("✓ All files processed successfully!")

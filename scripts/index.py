@@ -10,9 +10,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import hashlib
 import json
 import multiprocessing as mp
+import os
+import re
 import sqlite3
+import sys
 import time
 from collections.abc import Iterable
 from datetime import datetime
@@ -23,12 +27,18 @@ import aiosqlite
 import httpx
 from tqdm import tqdm
 
+from scripts.utility.weipu_api import WeipuAPISelectolax
+
 DEFAULT_LIBRARY_ID = "3050"
+WEIPU_LIBRARY_ID = "-1"
 BASE_URL = "https://api.thirdiron.com/v2"
 TOKEN_EXPIRY_BUFFER = 300
 DB_TIMEOUT_SECONDS = 30
 DB_RETRY_ATTEMPTS = 6
 DB_RETRY_BASE_DELAY = 0.5
+SQLITE_INT_MAX = (1 << 63) - 1
+SQLITE_INT_MIN = -(1 << 63)
+SIMPLE_TOKENIZER_ENV = "SIMPLE_TOKENIZER_PATH"
 
 
 async def execute_with_retry(
@@ -106,6 +116,176 @@ async def commit_with_retry(db: aiosqlite.Connection) -> None:
             if attempt >= DB_RETRY_ATTEMPTS - 1:
                 raise
             await asyncio.sleep(DB_RETRY_BASE_DELAY * (attempt + 1))
+
+
+def resolve_simple_tokenizer_path() -> str | None:
+    """
+    Resolve the configured simple tokenizer extension path.
+
+    Returns:
+        Filesystem path or None when unset.
+    """
+    value = os.getenv(SIMPLE_TOKENIZER_ENV)
+    if value:
+        path = value.strip()
+        return path or None
+    libs_dir = Path(__file__).parent.parent / "libs"
+    if sys.platform.startswith("win"):
+        candidate = libs_dir / "simple-windows" / "libsimple-windows-x64" / "simple.dll"
+    elif sys.platform.startswith("linux"):
+        candidate = (
+            libs_dir / "simple-linux" / "libsimple-linux-ubuntu-latest" / "libsimple.so"
+        )
+    else:
+        return None
+    return str(candidate) if candidate.exists() else None
+
+
+async def load_simple_tokenizer(db: aiosqlite.Connection) -> bool:
+    """
+    Load the simple tokenizer extension for the current connection.
+
+    Args:
+        db: Open aiosqlite connection.
+
+    Returns:
+        True when the extension is loaded.
+    """
+    path = resolve_simple_tokenizer_path()
+    if not path:
+        return False
+    try:
+        await db.enable_load_extension(True)
+        await db.load_extension(path)
+        await db.enable_load_extension(False)
+    except (sqlite3.OperationalError, OSError):
+        return False
+    return True
+
+
+def article_search_uses_simple(sql: str | None) -> bool:
+    """
+    Determine whether the FTS table uses the simple tokenizer.
+
+    Args:
+        sql: SQLite schema SQL for article_search.
+
+    Returns:
+        True when the schema references the simple tokenizer.
+    """
+    if not sql:
+        return False
+    normalized = sql.lower()
+    return "tokenize" in normalized and "simple" in normalized
+
+
+def build_article_search_sql(use_simple: bool) -> str:
+    """
+    Build the CREATE VIRTUAL TABLE SQL for article_search.
+
+    Args:
+        use_simple: Whether to enable the simple tokenizer.
+
+    Returns:
+        SQL statement for creating the FTS table.
+    """
+    tokenizer_clause = ", tokenize = 'simple'" if use_simple else ""
+    return f"""
+        CREATE VIRTUAL TABLE IF NOT EXISTS article_search
+        USING fts5(
+            article_id UNINDEXED,
+            title,
+            abstract,
+            doi,
+            authors,
+            journal_title
+            {tokenizer_clause}
+        );
+        """
+
+
+async def fetch_article_search_sql(db: aiosqlite.Connection) -> str | None:
+    """
+    Fetch the schema SQL for the article_search table.
+
+    Args:
+        db: Open aiosqlite connection.
+
+    Returns:
+        Table SQL or None when the table is missing.
+    """
+    cursor = await db.execute(
+        "SELECT sql FROM sqlite_master WHERE name = 'article_search'"
+    )
+    row = await cursor.fetchone()
+    await cursor.close()
+    if row and row[0]:
+        return str(row[0])
+    return None
+
+
+async def rebuild_article_search(db: aiosqlite.Connection) -> None:
+    """
+    Rebuild the article_search FTS rows from stored articles.
+
+    Args:
+        db: Open aiosqlite connection.
+
+    Returns:
+        None.
+    """
+    await execute_with_retry(
+        db,
+        """
+        INSERT OR REPLACE INTO article_search (
+            rowid,
+            article_id,
+            title,
+            abstract,
+            doi,
+            authors,
+            journal_title
+        )
+        SELECT
+            a.article_id,
+            a.article_id,
+            COALESCE(a.title, ''),
+            COALESCE(a.abstract, ''),
+            COALESCE(a.doi, ''),
+            COALESCE(a.authors, ''),
+            COALESCE(j.title, '')
+        FROM articles a
+        LEFT JOIN journals j ON j.journal_id = a.journal_id
+        """,
+    )
+
+
+async def ensure_article_search(db: aiosqlite.Connection, use_simple: bool) -> None:
+    """
+    Ensure the article_search FTS table exists and matches tokenizer settings.
+
+    Args:
+        db: Open aiosqlite connection.
+        use_simple: Whether the simple tokenizer is enabled.
+
+    Returns:
+        None.
+    """
+    existing_sql = await fetch_article_search_sql(db)
+    if existing_sql and article_search_uses_simple(existing_sql) and not use_simple:
+        raise RuntimeError(
+            "Simple tokenizer required for article_search. "
+            "Set SIMPLE_TOKENIZER_PATH to the simple extension."
+        )
+    if existing_sql and not use_simple:
+        return
+    if not existing_sql:
+        await execute_with_retry(db, build_article_search_sql(use_simple))
+        return
+    if use_simple and not article_search_uses_simple(existing_sql):
+        await execute_with_retry(db, "DROP TABLE IF EXISTS article_search")
+        await execute_with_retry(db, build_article_search_sql(use_simple))
+        await rebuild_article_search(db)
 
 
 class DatabaseWriter:
@@ -515,9 +695,51 @@ def to_int(value: Any) -> int | None:
     if value is None:
         return None
     try:
-        return int(value)
+        parsed = int(value)
     except (TypeError, ValueError):
         return None
+    if SQLITE_INT_MIN <= parsed <= SQLITE_INT_MAX:
+        return parsed
+    return None
+
+
+def is_weipu_library(value: str | None) -> bool:
+    """
+    Determine whether a library identifier indicates WeiPu usage.
+
+    Args:
+        value: Library identifier value.
+
+    Returns:
+        True when the identifier matches the WeiPu sentinel.
+    """
+    return (value or "").strip() == WEIPU_LIBRARY_ID
+
+
+def to_int_stable(value: Any, prefix: str) -> int | None:
+    """
+    Convert a value to int, falling back to a stable hash when needed.
+
+    Args:
+        value: Input value.
+        prefix: Prefix for hashing to reduce collisions across domains.
+
+    Returns:
+        Integer identifier or None when value is empty.
+    """
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = None
+    if parsed is not None and SQLITE_INT_MIN <= parsed <= SQLITE_INT_MAX:
+        return parsed
+    text = f"{prefix}:{value}"
+    digest = hashlib.sha256(text.encode("utf-8")).digest()
+    raw_value = int.from_bytes(digest[:8], "big", signed=False)
+    safe_value = raw_value & SQLITE_INT_MAX
+    return safe_value if safe_value != 0 else 1
 
 
 def to_bool_int(value: Any) -> int | None:
@@ -1037,6 +1259,7 @@ async def init_db(db: aiosqlite.Connection) -> None:
     await execute_with_retry(db, "PRAGMA foreign_keys=ON;")
     await execute_with_retry(db, "PRAGMA synchronous=NORMAL;")
     await execute_with_retry(db, f"PRAGMA busy_timeout={DB_TIMEOUT_SECONDS * 1000};")
+    use_simple = await load_simple_tokenizer(db)
 
     await execute_with_retry(
         db,
@@ -1200,20 +1423,7 @@ async def init_db(db: aiosqlite.Connection) -> None:
         """,
     )
 
-    await execute_with_retry(
-        db,
-        """
-        CREATE VIRTUAL TABLE IF NOT EXISTS article_search
-        USING fts5(
-            article_id UNINDEXED,
-            title,
-            abstract,
-            doi,
-            authors,
-            journal_title
-        );
-        """,
-    )
+    await ensure_article_search(db, use_simple)
 
     await execute_with_retry(
         db, "CREATE INDEX IF NOT EXISTS idx_journals_issn ON journals(issn);"
@@ -1448,6 +1658,213 @@ def build_meta_record(
         "csv_title": csv_row.get("title"),
         "csv_issn": csv_row.get("issn"),
         "csv_library": csv_row.get("library"),
+    }
+
+
+def format_weipu_authors(authors: Any) -> str | None:
+    """
+    Format WeiPu authors into a semicolon-delimited string.
+
+    Args:
+        authors: WeiPu author payload.
+
+    Returns:
+        Formatted author string or None.
+    """
+    if authors is None:
+        return None
+    if isinstance(authors, str):
+        text = authors.strip()
+        return text or None
+    if isinstance(authors, list):
+        names: list[str] = []
+        for item in authors:
+            if isinstance(item, dict):
+                name = item.get("name") or item.get("authorName") or item.get("author")
+                if name:
+                    names.append(str(name))
+            else:
+                text = str(item).strip()
+                if text:
+                    names.append(text)
+        return "; ".join(names) if names else None
+    text = str(authors).strip()
+    return text or None
+
+
+def extract_weipu_page_range(
+    pages: dict[str, Any] | None,
+) -> tuple[str | None, str | None]:
+    """
+    Extract page range from WeiPu page data.
+
+    Args:
+        pages: WeiPu page dictionary.
+
+    Returns:
+        Tuple of (start_page, end_page).
+    """
+    if not pages:
+        return None, None
+    start_page = pages.get("begin")
+    end_page = pages.get("end")
+    start_text = str(start_page).strip() if start_page is not None else None
+    end_text = str(end_page).strip() if end_page is not None else None
+    return start_text or None, end_text or None
+
+
+def is_numeric_page(value: str | None) -> bool:
+    """
+    Check whether a page value contains only digits.
+
+    Args:
+        value: Page value string.
+
+    Returns:
+        True when the value is empty or numeric-only.
+    """
+    if value is None:
+        return True
+    text = value.strip()
+    if not text:
+        return True
+    return bool(re.fullmatch(r"\d+", text))
+
+
+def build_weipu_journal_record(
+    journal_id: int,
+    library_id: str,
+    csv_row: dict[str, str],
+    journal_info: dict[str, Any] | None,
+    has_articles: bool,
+) -> dict[str, Any]:
+    """
+    Build a WeiPu journal record for database insertion.
+
+    Args:
+        journal_id: Internal journal ID.
+        library_id: Library identifier.
+        csv_row: Source CSV row.
+        journal_info: WeiPu journal payload.
+        has_articles: Whether the journal has articles.
+
+    Returns:
+        Dictionary of journal fields.
+    """
+    title = None
+    issn = None
+    if journal_info:
+        title = journal_info.get("journalName") or journal_info.get("name")
+        issn = journal_info.get("issn")
+    return {
+        "journal_id": journal_id,
+        "library_id": library_id,
+        "title": title or csv_row.get("title"),
+        "issn": issn or csv_row.get("issn"),
+        "eissn": None,
+        "scimago_rank": None,
+        "cover_url": None,
+        "available": 1 if journal_info else 0,
+        "toc_data_approved_and_live": None,
+        "has_articles": 1 if has_articles else 0,
+    }
+
+
+def build_weipu_issue_record(
+    issue: dict[str, Any], journal_id: int, year: int | None
+) -> dict[str, Any] | None:
+    """
+    Build a WeiPu issue record for database insertion.
+
+    Args:
+        issue: WeiPu issue payload.
+        journal_id: Internal journal ID.
+        year: Publication year if available.
+
+    Returns:
+        Dictionary of issue fields or None when issue ID is missing.
+    """
+    issue_id = to_int_stable(issue.get("id"), f"weipu-issue:{journal_id}")
+    if not issue_id:
+        return None
+    title = issue.get("name") or issue.get("title")
+    number = issue.get("name") or issue.get("number")
+    return {
+        "issue_id": issue_id,
+        "journal_id": journal_id,
+        "publication_year": year,
+        "title": title,
+        "volume": None,
+        "number": number,
+        "date": None,
+        "is_valid_issue": 1,
+        "suppressed": None,
+        "embargoed": None,
+        "within_subscription": None,
+    }
+
+
+def build_weipu_article_record(
+    article: dict[str, Any],
+    journal_id: int,
+    issue_id: int | None,
+) -> dict[str, Any] | None:
+    """
+    Build a WeiPu article record for database insertion.
+
+    Args:
+        article: WeiPu article payload.
+        journal_id: Internal journal ID.
+        issue_id: Internal issue ID.
+
+    Returns:
+        Dictionary of article fields or None when article ID is missing.
+    """
+    article_id = to_int_stable(article.get("id"), f"weipu-article:{journal_id}")
+    if not article_id:
+        return None
+    pages = article.get("pages") if isinstance(article.get("pages"), dict) else None
+    start_page, end_page = extract_weipu_page_range(pages)
+    if not is_numeric_page(start_page) or not is_numeric_page(end_page):
+        return None
+    publish_date = (
+        article.get("publishDate") or article.get("pubDate") or article.get("date")
+    )
+    return {
+        "article_id": article_id,
+        "journal_id": journal_id,
+        "issue_id": issue_id,
+        "sync_id": None,
+        "title": article.get("title"),
+        "date": publish_date,
+        "authors": format_weipu_authors(article.get("authors")),
+        "start_page": start_page,
+        "end_page": end_page,
+        "abstract": article.get("abstract"),
+        "doi": article.get("doi"),
+        "pmid": None,
+        "ill_url": None,
+        "link_resolver_openurl_link": None,
+        "email_article_request_link": None,
+        "permalink": None,
+        "suppressed": None,
+        "in_press": None,
+        "open_access": None,
+        "platform_id": str(article.get("id")) if article.get("id") else None,
+        "retraction_doi": None,
+        "retraction_date": None,
+        "retraction_related_urls": None,
+        "unpaywall_data_suppressed": None,
+        "expression_of_concern_doi": None,
+        "within_library_holdings": None,
+        "noodletools_export_link": None,
+        "avoid_unpaywall_publisher_links": None,
+        "browzine_web_in_context_link": None,
+        "content_location": None,
+        "libkey_content_location": None,
+        "full_text_file": None,
+        "libkey_full_text_file": None,
+        "nomad_fallback_url": None,
     }
 
 
@@ -1896,9 +2313,221 @@ async def fetch_issue_articles(
     return issue_id, articles
 
 
+async def fetch_weipu_issue_articles(
+    semaphore: asyncio.Semaphore,
+    client: WeipuAPISelectolax,
+    journal_id: str,
+    db_issue_id: int,
+    weipu_issue_id: str,
+) -> tuple[int, list[dict[str, Any]] | None]:
+    """
+    Fetch WeiPu articles for a single issue with concurrency control.
+
+    Args:
+        semaphore: Semaphore for limiting concurrent requests.
+        client: WeiPu API client.
+        journal_id: WeiPu journal ID.
+        db_issue_id: Internal issue ID for the database.
+        weipu_issue_id: WeiPu issue identifier.
+
+    Returns:
+        Tuple of database issue ID and article list or None.
+    """
+    async with semaphore:
+        payload = await client.get_issue_articles(journal_id, weipu_issue_id)
+    articles = payload.get("articles") if payload else None
+    return db_issue_id, articles
+
+
+async def process_weipu_journal(
+    db: DatabaseClient,
+    client: WeipuAPISelectolax,
+    csv_path: Path,
+    row: dict[str, str],
+    issue_batch_size: int,
+    request_workers: int,
+    show_year_progress: bool,
+    resume: bool,
+    update: bool,
+) -> None:
+    """
+    Export a single WeiPu journal to the database.
+
+    Args:
+        db: Database client.
+        client: WeiPu API client.
+        csv_path: Source CSV path.
+        row: CSV row for the journal.
+        issue_batch_size: Number of issues per fetch batch.
+        request_workers: Maximum concurrent HTTP requests.
+        show_year_progress: Whether to display year progress with tqdm.
+        resume: Whether to resume from completed years and journals.
+        update: Whether to perform incremental updates for existing years.
+
+    Returns:
+        None.
+    """
+    raw_journal_id = row.get("id")
+    if not raw_journal_id:
+        print(f"  - Skipping WeiPu journal with missing id: {row.get('title')}")
+        return
+
+    journal_id = to_int_stable(raw_journal_id, "weipu-journal")
+    if not journal_id:
+        print(f"  - Skipping WeiPu journal with invalid id: {row.get('title')}")
+        return
+
+    weipu_journal_id = str(raw_journal_id)
+    details = await client.get_journal_details(weipu_journal_id)
+    if not details:
+        journal_match = None
+        if row.get("issn"):
+            journal_match = await client.search_journal_by_issn(row["issn"])
+        if not journal_match and row.get("title"):
+            journal_match = await client.search_journal_by_title(row["title"])
+        if journal_match and journal_match.get("journalId"):
+            weipu_journal_id = str(journal_match["journalId"])
+            details = await client.get_journal_details(weipu_journal_id)
+
+    if not details:
+        print(f"  - No WeiPu details for journal {raw_journal_id}")
+        return
+
+    library_id = row.get("library") or WEIPU_LIBRARY_ID
+    journal_record = build_weipu_journal_record(
+        journal_id,
+        library_id,
+        row,
+        details,
+        details.get("totalIssues", 0) > 0,
+    )
+    meta_record = build_meta_record(journal_id, csv_path, row)
+    journal_title = journal_record.get("title") or row.get("title") or ""
+
+    await upsert_journal(db, journal_record)
+    await upsert_meta(db, meta_record)
+    await db.commit()
+
+    years = details.get("years") or []
+    if not years:
+        print(f"  - No publication years for WeiPu journal {journal_id}")
+        return
+
+    if resume and not update and await is_journal_complete(db, journal_id):
+        return
+
+    completed_years: set[int] = set()
+    if resume and not update:
+        completed_years = await get_completed_years(db, journal_id)
+
+    if update:
+        years_to_process = years
+    else:
+        years_to_process = [
+            year for year in years if year.get("year") not in completed_years
+        ]
+    total_years = len(years_to_process)
+    progress = None
+    if show_year_progress:
+        progress = tqdm(
+            total=total_years,
+            desc=f"Journal {journal_id} years",
+            unit="year",
+        )
+
+    semaphore = asyncio.Semaphore(max(1, request_workers))
+    for index, year_entry in enumerate(years_to_process, start=1):
+        year_value = year_entry.get("year")
+        if not isinstance(year_value, int):
+            if progress:
+                progress.update(1)
+            continue
+        if progress:
+            progress.set_postfix_str(f"{year_value} ({index}/{total_years})")
+        issues = year_entry.get("issues") or []
+        if not issues:
+            if progress:
+                progress.update(1)
+            continue
+
+        issue_records: list[dict[str, Any]] = []
+        issue_pairs: list[tuple[int, str]] = []
+        for issue in issues:
+            record = build_weipu_issue_record(issue, journal_id, year_value)
+            issue_id_value = issue.get("id")
+            if record and issue_id_value is not None:
+                issue_records.append(record)
+                issue_pairs.append((record["issue_id"], str(issue_id_value)))
+
+        if issue_records:
+            await upsert_issues(db, issue_records)
+        if update and issue_pairs:
+            await refresh_article_listing_for_issues(
+                db, [pair[0] for pair in issue_pairs]
+            )
+
+        issue_pairs_to_fetch = issue_pairs
+        if update and issue_pairs:
+            existing_issue_ids = await get_issue_ids_with_articles(
+                db, journal_id, year_value
+            )
+            issue_pairs_to_fetch = [
+                pair for pair in issue_pairs if pair[0] not in existing_issue_ids
+            ]
+
+        if issue_pairs_to_fetch:
+            for batch in chunked(issue_pairs_to_fetch, issue_batch_size):
+                tasks = [
+                    asyncio.create_task(
+                        fetch_weipu_issue_articles(
+                            semaphore,
+                            client,
+                            weipu_journal_id,
+                            db_issue_id,
+                            weipu_issue_id,
+                        )
+                    )
+                    for db_issue_id, weipu_issue_id in batch
+                ]
+                batch_records: list[dict[str, Any]] = []
+                for completed in asyncio.as_completed(tasks):
+                    try:
+                        issue_id, articles = await completed
+                    except Exception:
+                        print("  - Failed to fetch WeiPu articles for an issue batch")
+                        continue
+                    if not articles:
+                        continue
+                    for article in articles:
+                        record = build_weipu_article_record(
+                            article, journal_id, issue_id
+                        )
+                        if record:
+                            batch_records.append(record)
+                if batch_records:
+                    await upsert_articles(db, batch_records)
+                    await upsert_article_search(db, batch_records, journal_title)
+                    batch_article_ids = list(
+                        {record["article_id"] for record in batch_records}
+                    )
+                    await refresh_article_listing_for_articles(db, batch_article_ids)
+
+        if progress:
+            progress.update(1)
+        await mark_year_done(db, journal_id, year_value)
+        await db.commit()
+
+    if progress:
+        progress.close()
+
+    await mark_journal_done(db, journal_id)
+    await db.commit()
+
+
 async def process_journal(
     db: DatabaseClient,
     client: BrowZineAPIClient,
+    weipu_client: WeipuAPISelectolax,
     csv_path: Path,
     row: dict[str, str],
     issue_batch_size: int,
@@ -1913,6 +2542,7 @@ async def process_journal(
     Args:
         db: Database client.
         client: BrowZine API client.
+        weipu_client: WeiPu API client.
         csv_path: Source CSV path.
         row: CSV row for the journal.
         issue_batch_size: Number of issues per fetch batch.
@@ -1924,6 +2554,20 @@ async def process_journal(
     Returns:
         None.
     """
+    if is_weipu_library(row.get("library")):
+        await process_weipu_journal(
+            db,
+            weipu_client,
+            csv_path,
+            row,
+            issue_batch_size,
+            request_workers,
+            show_year_progress,
+            resume,
+            update,
+        )
+        return
+
     journal_id = to_int(row.get("id"))
     if not journal_id:
         print(f"  - Skipping journal with missing id: {row.get('title')}")
@@ -2201,11 +2845,13 @@ def process_journal_worker_ipc(
 
     async def run_worker() -> None:
         client = BrowZineAPIClient(library_id=DEFAULT_LIBRARY_ID, timeout=timeout)
+        weipu_client = WeipuAPISelectolax(timeout=timeout)
         db_client = IPCDatabaseClient(request_queue, response_queue, worker_id)
         try:
             await process_journal(
                 db_client,
                 client,
+                weipu_client,
                 Path(csv_path),
                 row,
                 issue_batch_size,
@@ -2216,6 +2862,7 @@ def process_journal_worker_ipc(
             )
         finally:
             await client.aclose()
+            await weipu_client.aclose()
 
     asyncio.run(run_worker())
     journal_id = row.get("id") or ""
@@ -2258,6 +2905,7 @@ def run_worker_batch(
 
     async def run_batch() -> None:
         client = BrowZineAPIClient(library_id=DEFAULT_LIBRARY_ID, timeout=timeout)
+        weipu_client = WeipuAPISelectolax(timeout=timeout)
         db_client = IPCDatabaseClient(request_queue, response_queue, worker_id)
         try:
             for row in rows:
@@ -2265,6 +2913,7 @@ def run_worker_batch(
                     await process_journal(
                         db_client,
                         client,
+                        weipu_client,
                         Path(csv_path),
                         row,
                         issue_batch_size,
@@ -2291,6 +2940,7 @@ def run_worker_batch(
                     )
         finally:
             await client.aclose()
+            await weipu_client.aclose()
 
     asyncio.run(run_batch())
 
@@ -2330,6 +2980,7 @@ async def export_csv(
 
     if processes <= 1:
         client = BrowZineAPIClient(library_id=DEFAULT_LIBRARY_ID, timeout=timeout)
+        weipu_client = WeipuAPISelectolax(timeout=timeout)
         async with aiosqlite.connect(db_path, timeout=DB_TIMEOUT_SECONDS) as db:
             await init_db(db)
             local_db = LocalDatabaseClient(db)
@@ -2341,6 +2992,7 @@ async def export_csv(
                     await process_journal(
                         local_db,
                         client,
+                        weipu_client,
                         csv_path,
                         row,
                         issue_batch_size,
@@ -2355,6 +3007,7 @@ async def export_csv(
                 if not update:
                     await mark_listing_ready(db)
                 await client.aclose()
+                await weipu_client.aclose()
         return
 
     ctx = mp.get_context()

@@ -4,7 +4,9 @@ FastAPI backend for querying BrowZine article index databases.
 
 from __future__ import annotations
 
+import os
 import sqlite3
+import sys
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +23,7 @@ from starlette.requests import Request
 PROJECT_ROOT = Path(__file__).parent.parent
 INDEX_DIR = PROJECT_ROOT / "data" / "index"
 MAX_LIMIT = 200
+SIMPLE_TOKENIZER_ENV = "SIMPLE_TOKENIZER_PATH"
 
 
 class JournalRecord(BaseModel):
@@ -370,6 +373,7 @@ async def get_db(
     db_path = resolve_db_path(db)
     connection = await aiosqlite.connect(db_path)
     connection.row_factory = sqlite3.Row
+    await load_simple_tokenizer(connection)
     return connection
 
 
@@ -429,6 +433,99 @@ async def fetch_one(
     row = await cursor.fetchone()
     await cursor.close()
     return dict(row) if row else None
+
+
+def resolve_simple_tokenizer_path() -> str | None:
+    """
+    Resolve the configured simple tokenizer extension path.
+
+    Returns:
+        Filesystem path or None when unset.
+    """
+    value = os.getenv(SIMPLE_TOKENIZER_ENV)
+    if value:
+        path = value.strip()
+        return path or None
+    libs_dir = PROJECT_ROOT / "libs"
+    if sys.platform.startswith("win"):
+        candidate = libs_dir / "simple-windows" / "libsimple-windows-x64" / "simple.dll"
+    elif sys.platform.startswith("linux"):
+        candidate = (
+            libs_dir / "simple-linux" / "libsimple-linux-ubuntu-latest" / "libsimple.so"
+        )
+    else:
+        return None
+    return str(candidate) if candidate.exists() else None
+
+
+async def load_simple_tokenizer(db: aiosqlite.Connection) -> bool:
+    """
+    Load the simple tokenizer extension for the current connection.
+
+    Args:
+        db: Open aiosqlite connection.
+
+    Returns:
+        True when the extension is loaded.
+    """
+    path = resolve_simple_tokenizer_path()
+    if not path:
+        return False
+    try:
+        await db.enable_load_extension(True)
+        await db.load_extension(path)
+        await db.enable_load_extension(False)
+    except (sqlite3.OperationalError, OSError):
+        return False
+    return True
+
+
+def article_search_uses_simple(sql: str | None) -> bool:
+    """
+    Determine whether the article_search table uses the simple tokenizer.
+
+    Args:
+        sql: SQLite schema SQL for article_search.
+
+    Returns:
+        True when the schema references the simple tokenizer.
+    """
+    if not sql:
+        return False
+    normalized = sql.lower()
+    return "tokenize" in normalized and "simple" in normalized
+
+
+async def fetch_article_search_sql(db: aiosqlite.Connection) -> str | None:
+    """
+    Fetch the schema SQL for the article_search table.
+
+    Args:
+        db: Database connection.
+
+    Returns:
+        Table SQL or None when missing.
+    """
+    row = await fetch_one(
+        db, "SELECT sql FROM sqlite_master WHERE name = 'article_search'", []
+    )
+    if row and row.get("sql"):
+        return str(row["sql"])
+    return None
+
+
+async def is_simple_search_enabled(db: aiosqlite.Connection) -> bool:
+    """
+    Check whether article_search was built with the simple tokenizer.
+
+    Args:
+        db: Database connection.
+
+    Returns:
+        True when simple tokenizer is enabled for article_search.
+    """
+    sql = await fetch_article_search_sql(db)
+    return article_search_uses_simple(sql)
 
 
 JOURNAL_SORT_FIELDS = {
@@ -924,6 +1021,7 @@ async def list_articles_from_listing(
     doi: str | None,
     pmid: str | None,
     q: str | None,
+    use_simple_search: bool,
     sort: str | None,
     limit: int,
     offset: int,
@@ -949,6 +1047,7 @@ async def list_articles_from_listing(
         doi: Filter by DOI.
         pmid: Filter by PMID.
         q: Full-text search query for FTS5.
+        use_simple_search: Whether to wrap queries with simple_query().
         sort: Sort string for articles.
         limit: Page size.
         offset: Page offset.
@@ -1003,9 +1102,10 @@ async def list_articles_from_listing(
         where_clauses.append("l.publication_year = ?")
         params.append(year)
     if q and q.strip():
+        matcher = "simple_query(?)" if use_simple_search else "?"
         fts_clause = (
             "l.article_id IN ("
-            "SELECT rowid FROM article_search WHERE article_search MATCH ?"
+            f"SELECT rowid FROM article_search WHERE article_search MATCH {matcher}"
             ")"
         )
         where_clauses.append(fts_clause)
@@ -1171,6 +1271,7 @@ async def list_articles_from_articles(
     doi: str | None,
     pmid: str | None,
     q: str | None,
+    use_simple_search: bool,
     sort: str | None,
     limit: int,
     offset: int,
@@ -1196,6 +1297,7 @@ async def list_articles_from_articles(
         doi: Filter by DOI.
         pmid: Filter by PMID.
         q: Full-text search query for FTS5.
+        use_simple_search: Whether to wrap queries with simple_query().
         sort: Sort string for articles.
         limit: Page size.
         offset: Page offset.
@@ -1255,7 +1357,8 @@ async def list_articles_from_articles(
         where_clauses.append("i.publication_year = ?")
         params.append(year)
     if q and q.strip():
-        where_clauses.append("article_search MATCH ?")
+        matcher = "simple_query(?)" if use_simple_search else "?"
+        where_clauses.append(f"article_search MATCH {matcher}")
         params.append(q.strip())
 
     join_sql = []
@@ -1467,6 +1570,7 @@ async def list_articles(
     Returns:
         Paginated article list.
     """
+    use_simple_search = await is_simple_search_enabled(db)
     if await is_article_listing_ready(db):
         return await list_articles_from_listing(
             db,
@@ -1484,6 +1588,7 @@ async def list_articles(
             doi,
             pmid,
             q,
+            use_simple_search,
             sort,
             limit,
             offset,
@@ -1507,6 +1612,7 @@ async def list_articles(
         doi,
         pmid,
         q,
+        use_simple_search,
         sort,
         limit,
         offset,
