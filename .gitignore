@@ -3,6 +3,7 @@
 /.venv
 /.vscode
 /*.egg-info
+/backup
 /data/index
 /AGENTS.md
 /CLAUDE.md

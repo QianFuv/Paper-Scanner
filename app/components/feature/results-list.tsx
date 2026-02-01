@@ -2,7 +2,7 @@
 
 import { useInfiniteQuery, type InfiniteData } from '@tanstack/react-query';
 import { useQueryState, parseAsString, parseAsArrayOf, parseAsInteger } from 'nuqs';
-import { getArticles, type Article, type ArticlePage } from '@/lib/api';
+import { getArticles, getFullTextUrl, type Article, type ArticlePage } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -128,12 +128,14 @@ export function ResultsList() {
 
   const highlightTerms = useMemo(() => {
     if (!q) return [];
+    const isCjk = (value: string) => /[\u4e00-\u9fff]/.test(value);
+    const meetsLength = (value: string) => (isCjk(value) ? value.length >= 2 : value.length > 2);
     const terms: string[] = [];
     const phraseRegex = /"([^"]+)"/g;
     let match = phraseRegex.exec(q);
     while (match) {
       const phrase = match[1].trim();
-      if (phrase.length > 2) {
+      if (meetsLength(phrase)) {
         terms.push(phrase);
       }
       match = phraseRegex.exec(q);
@@ -158,7 +160,7 @@ export function ResultsList() {
         cleaned = cleaned.slice(colonIndex + 1);
       }
       cleaned = cleaned.replace(/\*+$/, '');
-      if (cleaned.length > 2) {
+      if (meetsLength(cleaned)) {
         terms.push(cleaned);
       }
     }
@@ -346,8 +348,16 @@ export function ResultsList() {
                                     </>
                                 )}
                             </Button>
-                            {article.doi && (
-                                <a href={`https://doi.org/${article.doi}`} target="_blank" rel="noreferrer">
+                            {(article.doi || article.platform_id) && (
+                                <a
+                                    href={
+                                        article.doi
+                                            ? `https://doi.org/${article.doi}`
+                                            : getFullTextUrl(article.article_id)
+                                    }
+                                    target="_blank"
+                                    rel="noreferrer"
+                                >
                                     <Button variant="outline" size="sm">
                                         Read Full Text <ExternalLink className="ml-2 h-4 w-4" />
                                     </Button>

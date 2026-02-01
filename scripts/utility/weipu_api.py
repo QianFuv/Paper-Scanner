@@ -243,6 +243,9 @@ def collect_detail_links(
             continue
         article_key = str(article_id)
         if article_key in links:
+            detail_url = normalize_detail_url(links[article_key])
+            if detail_url:
+                article["detailUrl"] = detail_url
             continue
         detail_url = normalize_detail_url(article.get("detailUrl"))
         if detail_url:
@@ -979,6 +982,24 @@ console.log(enc.toString('hex'));
             return None
         return html_text, payload
 
+    async def fetch_html(self, url: str) -> str | None:
+        """
+        Fetch HTML for a CQVIP page without parsing the Nuxt payload.
+
+        Args:
+            url: Target URL.
+
+        Returns:
+            HTML string or None.
+        """
+        try:
+            response = await self._client.get(url)
+        except httpx.RequestError:
+            return None
+        if response.status_code != 200:
+            return None
+        return response.text
+
     def extract_doc_links(self, html_text: str) -> dict[str, str]:
         """
         Extract article detail URLs from an issue page HTML.
@@ -1236,7 +1257,7 @@ console.log(enc.toString('hex'));
         }
 
     async def get_issue_articles(
-        self, journal_id: str, issue_id: str
+        self, journal_id: str, issue_id: str, enrich: bool = True
     ) -> dict[str, Any] | None:
         """
         Get articles for a journal issue.
@@ -1244,6 +1265,7 @@ console.log(enc.toString('hex'));
         Args:
             journal_id: CQVIP journal identifier.
             issue_id: CQVIP issue identifier.
+            enrich: Whether to enrich articles with detail pages.
 
         Returns:
             Issue article dictionary or None.
@@ -1265,20 +1287,21 @@ console.log(enc.toString('hex'));
             normalized = self.normalize_article(item)
             if normalized:
                 articles.append(normalized)
-        doi_map = extract_doi_map(payload)
-        if doi_map:
-            for article in articles:
-                article_id = article.get("id")
-                if article_id is None:
-                    continue
-                if article.get("doi"):
-                    continue
-                doi = doi_map.get(str(article_id))
-                if doi:
-                    article["doi"] = doi
+        if enrich:
+            doi_map = extract_doi_map(payload)
+            if doi_map:
+                for article in articles:
+                    article_id = article.get("id")
+                    if article_id is None:
+                        continue
+                    if article.get("doi"):
+                        continue
+                    doi = doi_map.get(str(article_id))
+                    if doi:
+                        article["doi"] = doi
         doc_links = self.extract_doc_links(html_text)
         detail_links = collect_detail_links(articles, doc_links)
-        if detail_links:
+        if enrich and detail_links:
             await self.enrich_articles_with_details(articles, detail_links)
         total_pages = 0
         pages_available = False

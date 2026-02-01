@@ -15,6 +15,7 @@ export interface Article {
   authors?: string;
   abstract?: string;
   doi?: string;
+  platform_id?: string;
   journal_title?: string;
   open_access?: number;
   in_press?: number;
@@ -61,6 +62,10 @@ export function setDatabase(db: string) {
 
 export function getCurrentDatabase() {
     return currentDb;
+}
+
+export function getFullTextUrl(articleId: number): string {
+    return withDb(`/articles/${articleId}/fulltext`);
 }
 
 function withDb(url: string, params?: URLSearchParams): string {

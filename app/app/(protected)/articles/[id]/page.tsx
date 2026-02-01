@@ -93,8 +93,16 @@ export default function ArticlePage() {
               )}
 
               <div className="flex flex-wrap gap-4 pt-4 border-t">
-                  {article.doi && (
-                      <a href={`https://doi.org/${article.doi}`} target="_blank" rel="noreferrer">
+                  {(article.doi || article.platform_id) && (
+                      <a
+                          href={
+                              article.doi
+                                  ? `https://doi.org/${article.doi}`
+                                  : `${API_BASE_URL}/articles/${article.article_id}/fulltext?db=${DEFAULT_DB}`
+                          }
+                          target="_blank"
+                          rel="noreferrer"
+                      >
                           <Button>
                               Read Full Text <ExternalLink className="ml-2 h-4 w-4" />
                           </Button>

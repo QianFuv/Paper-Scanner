@@ -5,6 +5,7 @@ FastAPI backend for querying BrowZine article index databases.
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import sys
 from collections.abc import AsyncGenerator
@@ -19,11 +20,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+from starlette.responses import RedirectResponse
+
+from scripts.utility.weipu_api import WeipuAPISelectolax, normalize_years
 
 PROJECT_ROOT = Path(__file__).parent.parent
 INDEX_DIR = PROJECT_ROOT / "data" / "index"
 MAX_LIMIT = 200
 SIMPLE_TOKENIZER_ENV = "SIMPLE_TOKENIZER_PATH"
+WEIPU_LIBRARY_ID = "-1"
 
 
 class JournalRecord(BaseModel):
@@ -528,6 +533,188 @@ async def is_simple_search_enabled(db: aiosqlite.Connection) -> bool:
     return article_search_uses_simple(sql)
 
 
+def contains_cjk(value: str) -> bool:
+    """
+    Check whether a string contains CJK characters.
+
+    Args:
+        value: Input string.
+
+    Returns:
+        True when the string contains CJK characters.
+    """
+    return bool(re.search(r"[\u4e00-\u9fff]", value))
+
+
+def should_use_simple_query(q: str | None, simple_enabled: bool) -> bool:
+    """
+    Decide whether to wrap the search query with simple_query().
+
+    Args:
+        q: Raw search query.
+        simple_enabled: Whether the simple tokenizer is enabled.
+
+    Returns:
+        True when simple_query() should be used.
+    """
+    if not simple_enabled or not q:
+        return False
+    return not contains_cjk(q)
+
+
+def normalize_issue_number(value: str | None) -> str | None:
+    """
+    Normalize an issue number for matching.
+
+    Args:
+        value: Raw issue number value.
+
+    Returns:
+        Normalized issue number or None.
+    """
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    digits = re.findall(r"\d+", text)
+    if digits:
+        normalized = digits[-1].lstrip("0") or digits[-1]
+        prefix = re.sub(r"\d+", "", text)
+        prefix = prefix.strip()
+        if prefix:
+            return f"{prefix}{normalized}"
+        return normalized
+    return text
+
+
+def normalize_title(value: str | None) -> str:
+    """
+    Normalize a title string for comparison.
+
+    Args:
+        value: Raw title value.
+
+    Returns:
+        Normalized title string.
+    """
+    if value is None:
+        return ""
+    text = str(value).strip().lower()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", "", text)
+    return re.sub(r"[^\w\u4e00-\u9fff]+", "", text)
+
+
+async def resolve_weipu_detail_url(
+    journal_title: str | None,
+    issn: str | None,
+    publication_year: int | None,
+    issue_number: str | None,
+    platform_id: str | None,
+    article_title: str | None,
+) -> str | None:
+    """
+    Resolve a signed WeiPu detail URL for an article.
+
+    Args:
+        journal_title: Journal title.
+        issn: Journal ISSN.
+        publication_year: Publication year if available.
+        issue_number: Issue number or label.
+        platform_id: WeiPu article identifier.
+        article_title: Article title for fallback matching.
+
+    Returns:
+        Signed detail URL or None.
+    """
+    if not platform_id and not article_title:
+        return None
+    client = WeipuAPISelectolax()
+    try:
+        journal = None
+        if issn:
+            journal = await client.search_journal_by_issn(issn)
+        if not journal and journal_title:
+            journal = await client.search_journal_by_title(journal_title)
+        journal_id = journal.get("journalId") if journal else None
+        if not journal_id:
+            return None
+        payload = await client.fetch_nuxt_payload(
+            f"https://www.cqvip.com/journal/{journal_id}/{journal_id}"
+        )
+        years: list[dict[str, Any]] = normalize_years(payload) if payload else []
+        if not years:
+            details = await client.get_journal_details(str(journal_id))
+            details_years = details.get("years") if details else None
+            if isinstance(details_years, list):
+                years = [entry for entry in details_years if isinstance(entry, dict)]
+        if not years:
+            return None
+        issue_number_norm = normalize_issue_number(issue_number)
+        issue_candidates: list[dict[str, str]] = []
+        for year_entry in years:
+            year_value = year_entry.get("year")
+            if publication_year and year_value != publication_year:
+                continue
+            issues = year_entry.get("issues") or []
+            if issue_number_norm:
+                for issue in issues:
+                    name_norm = normalize_issue_number(issue.get("name"))
+                    if name_norm == issue_number_norm:
+                        issue_candidates.append(issue)
+            else:
+                issue_candidates.extend(issues)
+        if not issue_candidates:
+            for year_entry in years:
+                issues = year_entry.get("issues") or []
+                if issues:
+                    issue_candidates.extend(issues)
+                    break
+        seen_ids: set[str] = set()
+        issue_ids: list[str] = []
+        for issue in issue_candidates:
+            issue_id = issue.get("id")
+            if issue_id is None:
+                continue
+            issue_key = str(issue_id)
+            if issue_key in seen_ids:
+                continue
+            seen_ids.add(issue_key)
+            issue_ids.append(issue_key)
+            if len(issue_ids) >= 12:
+                break
+        title_norm = normalize_title(article_title)
+        for issue_id in issue_ids:
+            url = f"https://www.cqvip.com/journal/{journal_id}/{issue_id}"
+            html_text = await client.fetch_html(url)
+            if html_text:
+                doc_links = client.extract_doc_links(html_text)
+                if platform_id and doc_links:
+                    detail_url = doc_links.get(str(platform_id))
+                    if detail_url:
+                        return str(detail_url)
+            if not title_norm:
+                continue
+            payload = await client.get_issue_articles(
+                str(journal_id),
+                issue_id,
+                enrich=False,
+            )
+            articles = payload.get("articles") if payload else None
+            if not articles:
+                continue
+            for article in articles:
+                if normalize_title(article.get("title")) == title_norm:
+                    detail_url = article.get("detailUrl")
+                    if detail_url:
+                        return str(detail_url)
+    finally:
+        await client.aclose()
+    return None
+
+
 JOURNAL_SORT_FIELDS = {
     "journal_id": "j.journal_id",
     "title": "j.title",
@@ -1021,7 +1208,7 @@ async def list_articles_from_listing(
     doi: str | None,
     pmid: str | None,
     q: str | None,
-    use_simple_search: bool,
+    use_simple_query: bool,
     sort: str | None,
     limit: int,
     offset: int,
@@ -1047,7 +1234,7 @@ async def list_articles_from_listing(
         doi: Filter by DOI.
         pmid: Filter by PMID.
         q: Full-text search query for FTS5.
-        use_simple_search: Whether to wrap queries with simple_query().
+        use_simple_query: Whether to wrap queries with simple_query().
         sort: Sort string for articles.
         limit: Page size.
         offset: Page offset.
@@ -1102,7 +1289,7 @@ async def list_articles_from_listing(
         where_clauses.append("l.publication_year = ?")
         params.append(year)
     if q and q.strip():
-        matcher = "simple_query(?)" if use_simple_search else "?"
+        matcher = "simple_query(?)" if use_simple_query else "?"
         fts_clause = (
             "l.article_id IN ("
             f"SELECT rowid FROM article_search WHERE article_search MATCH {matcher}"
@@ -1271,7 +1458,7 @@ async def list_articles_from_articles(
     doi: str | None,
     pmid: str | None,
     q: str | None,
-    use_simple_search: bool,
+    use_simple_query: bool,
     sort: str | None,
     limit: int,
     offset: int,
@@ -1297,7 +1484,7 @@ async def list_articles_from_articles(
         doi: Filter by DOI.
         pmid: Filter by PMID.
         q: Full-text search query for FTS5.
-        use_simple_search: Whether to wrap queries with simple_query().
+        use_simple_query: Whether to wrap queries with simple_query().
         sort: Sort string for articles.
         limit: Page size.
         offset: Page offset.
@@ -1357,7 +1544,7 @@ async def list_articles_from_articles(
         where_clauses.append("i.publication_year = ?")
         params.append(year)
     if q and q.strip():
-        matcher = "simple_query(?)" if use_simple_search else "?"
+        matcher = "simple_query(?)" if use_simple_query else "?"
         where_clauses.append(f"article_search MATCH {matcher}")
         params.append(q.strip())
 
@@ -1571,6 +1758,7 @@ async def list_articles(
         Paginated article list.
     """
     use_simple_search = await is_simple_search_enabled(db)
+    use_simple_query = should_use_simple_query(q, use_simple_search)
     if await is_article_listing_ready(db):
         return await list_articles_from_listing(
             db,
@@ -1588,7 +1776,7 @@ async def list_articles(
             doi,
             pmid,
             q,
-            use_simple_search,
+            use_simple_query,
             sort,
             limit,
             offset,
@@ -1612,7 +1800,7 @@ async def list_articles(
         doi,
         pmid,
         q,
-        use_simple_search,
+        use_simple_query,
         sort,
         limit,
         offset,
@@ -1687,6 +1875,67 @@ async def get_article(
     if not row:
         raise HTTPException(status_code=404, detail="Article not found")
     return ArticleRecord(**row)
+
+
+@app.get("/articles/{article_id}/fulltext")
+async def redirect_article_fulltext(
+    article_id: int,
+    db: Annotated[aiosqlite.Connection, Depends(get_db_dependency)],
+) -> RedirectResponse:
+    """
+    Redirect to a DOI or signed full text URL for an article.
+
+    Args:
+        article_id: Article identifier.
+        db: Database connection.
+
+    Returns:
+        RedirectResponse to the resolved full text URL.
+    """
+    row = await fetch_one(
+        db,
+        """
+        SELECT
+            a.article_id,
+            a.title,
+            a.doi,
+            a.platform_id,
+            a.full_text_file,
+            a.libkey_full_text_file,
+            i.publication_year,
+            i.number,
+            j.issn,
+            j.title AS journal_title,
+            j.library_id
+        FROM articles a
+        LEFT JOIN issues i ON i.issue_id = a.issue_id
+        JOIN journals j ON j.journal_id = a.journal_id
+        WHERE a.article_id = ?
+        """,
+        [article_id],
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Article not found")
+    doi = row.get("doi")
+    if doi:
+        doi_text = str(doi).strip()
+        if doi_text:
+            return RedirectResponse(f"https://doi.org/{doi_text}")
+    full_text_file = row.get("full_text_file") or row.get("libkey_full_text_file")
+    if full_text_file:
+        return RedirectResponse(str(full_text_file))
+    if row.get("library_id") == WEIPU_LIBRARY_ID:
+        detail_url = await resolve_weipu_detail_url(
+            row.get("journal_title"),
+            row.get("issn"),
+            row.get("publication_year"),
+            row.get("number"),
+            row.get("platform_id"),
+            row.get("title"),
+        )
+        if detail_url:
+            return RedirectResponse(detail_url)
+    raise HTTPException(status_code=404, detail="Full text not available")
 
 
 def main() -> None:
