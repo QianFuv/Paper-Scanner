@@ -3,16 +3,26 @@
 import { useQuery } from '@tanstack/react-query';
 import { useQueryState, parseAsString, parseAsArrayOf, parseAsInteger } from 'nuqs';
 import { useTheme } from 'next-themes';
-import { getAreas, getRanks, getYears, getCurrentDatabase, getDatabases, setDatabase } from '@/lib/api';
+import {
+  getAreas,
+  getYears,
+  getJournalOptions,
+  getCurrentDatabase,
+  getDatabases,
+  setDatabase,
+} from '@/lib/api';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Moon, Sun, Database } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 export function Sidebar({ className }: { className?: string }) {
   const { theme, setTheme } = useTheme();
@@ -20,7 +30,10 @@ export function Sidebar({ className }: { className?: string }) {
   const [selectedDb, setSelectedDb] = useState(getCurrentDatabase());
   const [, setQ] = useQueryState('q', parseAsString);
   const [areas, setAreas] = useQueryState('area', parseAsArrayOf(parseAsString).withDefault([]));
-  const [ranks, setRanks] = useQueryState('rank', parseAsArrayOf(parseAsString).withDefault([]));
+  const [journalIds, setJournalIds] = useQueryState(
+    'journal_id',
+    parseAsArrayOf(parseAsString).withDefault([]),
+  );
   const [yearMin, setYearMin] = useQueryState('year_min', parseAsInteger);
   const [yearMax, setYearMax] = useQueryState('year_max', parseAsInteger);
 
@@ -46,9 +59,9 @@ export function Sidebar({ className }: { className?: string }) {
     queryFn: getAreas,
   });
 
-  const { data: rankOptions, isLoading: loadingRanks } = useQuery({
-    queryKey: ['meta', 'ranks', selectedDb],
-    queryFn: getRanks,
+  const { data: journalOptions, isLoading: loadingJournals } = useQuery({
+    queryKey: ['meta', 'journals', selectedDb],
+    queryFn: getJournalOptions,
   });
 
   const { data: yearData, isLoading: loadingYears } = useQuery({
@@ -65,7 +78,7 @@ export function Sidebar({ className }: { className?: string }) {
   const handleClearFilters = () => {
     setQ(null);
     setAreas([]);
-    setRanks([]);
+    setJournalIds([]);
     setYearMin(null);
     setYearMax(null);
   };
@@ -96,8 +109,8 @@ export function Sidebar({ className }: { className?: string }) {
     });
   };
 
-  const handleRankChange = (value: string, checked: boolean) => {
-    setRanks((current) => {
+  const handleJournalChange = (value: string, checked: boolean) => {
+    setJournalIds((current) => {
       if (checked) {
         return current.includes(value) ? current : [...current, value];
       }
@@ -115,6 +128,41 @@ export function Sidebar({ className }: { className?: string }) {
       setYearMin(nextMin);
       setYearMax(nextMax);
   };
+
+  const [journalSearch, setJournalSearch] = useState('');
+
+  const filteredJournalOptions = useMemo(() => {
+    if (!journalOptions) {
+      return [];
+    }
+    const query = journalSearch.trim().toLowerCase();
+    if (!query) {
+      return journalOptions;
+    }
+    return journalOptions.filter((option) => {
+      const title = option.title ?? '';
+      return title.toLowerCase().includes(query);
+    });
+  }, [journalOptions, journalSearch]);
+
+  const journalLabelMap = useMemo(() => {
+    const map = new Map<string, string>();
+    journalOptions?.forEach((option) => {
+      map.set(String(option.journal_id), option.title ?? String(option.journal_id));
+    });
+    return map;
+  }, [journalOptions]);
+
+  const selectedJournalLabels = useMemo(() => {
+    return journalIds.map((id) => journalLabelMap.get(id) ?? id);
+  }, [journalIds, journalLabelMap]);
+
+  const journalSummary =
+    selectedJournalLabels.length === 0
+      ? 'All journals'
+      : selectedJournalLabels.length === 1
+        ? selectedJournalLabels[0]
+        : `${selectedJournalLabels.length} journals`;
 
   return (
     <aside className={cn("w-[19.2rem] flex flex-col h-full border-r bg-background", className)}>
@@ -204,27 +252,68 @@ export function Sidebar({ className }: { className?: string }) {
           </div>
 
           <div className="space-y-3">
-              <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Ranks</h4>
-              {loadingRanks ? (
-                  <div className="space-y-2">
-                      <Skeleton className="h-4 w-full" />
-                  </div>
+              <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Journals</h4>
+              {loadingJournals ? (
+                  <Skeleton className="h-8 w-full" />
               ) : (
-                  <div className="space-y-2">
-                      {rankOptions?.map((opt) => (
-                          <div key={opt.value} className="flex items-center space-x-2">
-                              <Checkbox 
-                                  id={`rank-${opt.value}`} 
-                                  checked={ranks.includes(opt.value)}
-                                  onCheckedChange={(c) => handleRankChange(opt.value, c as boolean)}
-                              />
-                              <Label htmlFor={`rank-${opt.value}`} className="text-sm font-normal flex-1 cursor-pointer">{opt.value}</Label>
-                              <span className="text-xs text-muted-foreground">{opt.count}</span>
-                          </div>
-                      ))}
-                  </div>
+                  <Popover>
+                      <PopoverTrigger asChild>
+                          <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-full justify-between"
+                              title={journalSummary}
+                          >
+                              <span className="truncate">{journalSummary}</span>
+                              {journalIds.length > 0 && (
+                                  <span className="text-xs text-muted-foreground">
+                                      {journalIds.length}
+                                  </span>
+                              )}
+                          </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-72 p-3">
+                          <Input
+                              value={journalSearch}
+                              onChange={(event) => setJournalSearch(event.target.value)}
+                              placeholder="Search journals"
+                              className="h-8"
+                          />
+                          <ScrollArea className="mt-2 h-60">
+                              <div className="space-y-2">
+                                  {filteredJournalOptions.map((option) => {
+                                      const id = String(option.journal_id);
+                                      return (
+                                          <div key={id} className="flex items-center space-x-2">
+                                              <Checkbox
+                                                  id={`journal-${id}`}
+                                                  checked={journalIds.includes(id)}
+                                                  onCheckedChange={(c) =>
+                                                      handleJournalChange(id, c as boolean)
+                                                  }
+                                              />
+                                              <Label
+                                                  htmlFor={`journal-${id}`}
+                                                  className="text-sm font-normal truncate flex-1 cursor-pointer"
+                                                  title={option.title ?? id}
+                                              >
+                                                  {option.title ?? id}
+                                              </Label>
+                                          </div>
+                                      );
+                                  })}
+                                  {filteredJournalOptions.length === 0 && (
+                                      <div className="text-xs text-muted-foreground">
+                                          No journals found.
+                                      </div>
+                                  )}
+                              </div>
+                          </ScrollArea>
+                      </PopoverContent>
+                  </Popover>
               )}
           </div>
+
         </div>
 
         <div className="space-y-4">

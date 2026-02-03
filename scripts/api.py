@@ -173,6 +173,15 @@ class YearSummary(BaseModel):
     journal_count: int
 
 
+class JournalOption(BaseModel):
+    """
+    Journal option for selection lists.
+    """
+
+    journal_id: int
+    title: str | None = None
+
+
 @dataclass(frozen=True)
 class SortSpec:
     """
@@ -789,6 +798,31 @@ async def list_areas(
     return [ValueCount(**row) for row in rows]
 
 
+@app.get("/meta/journals", response_model=list[JournalOption])
+async def list_journal_options(
+    db: Annotated[aiosqlite.Connection, Depends(get_db_dependency)],
+) -> list[JournalOption]:
+    """
+    List journal identifiers and titles.
+
+    Args:
+        db: Database connection.
+
+    Returns:
+        Journal option list.
+    """
+    rows = await fetch_all(
+        db,
+        """
+        SELECT journal_id, title
+        FROM journals
+        ORDER BY title ASC
+        """,
+        [],
+    )
+    return [JournalOption(**row) for row in rows]
+
+
 @app.get("/meta/libraries", response_model=list[ValueCount])
 async def list_libraries(
     db: Annotated[aiosqlite.Connection, Depends(get_db_dependency)],
@@ -1159,7 +1193,7 @@ async def is_article_listing_ready(db: aiosqlite.Connection) -> bool:
 
 async def list_articles_from_listing(
     db: aiosqlite.Connection,
-    journal_id: int | None,
+    journal_id: list[int] | None,
     issue_id: int | None,
     year: int | None,
     area: list[str] | None,
@@ -1184,7 +1218,7 @@ async def list_articles_from_listing(
 
     Args:
         db: Database connection.
-        journal_id: Filter by journal ID.
+        journal_id: Filter by journal IDs.
         issue_id: Filter by issue ID.
         year: Filter by publication year from issues.
         area: Filter by journal area (multiple allowed).
@@ -1210,9 +1244,10 @@ async def list_articles_from_listing(
     where_clauses: list[str] = []
     params: list[Any] = []
 
-    if journal_id is not None:
-        where_clauses.append("l.journal_id = ?")
-        params.append(journal_id)
+    if journal_id:
+        placeholders = ", ".join(["?"] * len(journal_id))
+        where_clauses.append(f"l.journal_id IN ({placeholders})")
+        params.extend(journal_id)
     if issue_id is not None:
         where_clauses.append("l.issue_id = ?")
         params.append(issue_id)
@@ -1403,7 +1438,7 @@ async def list_articles_from_listing(
 
 async def list_articles_from_articles(
     db: aiosqlite.Connection,
-    journal_id: int | None,
+    journal_id: list[int] | None,
     issue_id: int | None,
     year: int | None,
     area: list[str] | None,
@@ -1428,7 +1463,7 @@ async def list_articles_from_articles(
 
     Args:
         db: Database connection.
-        journal_id: Filter by journal ID.
+        journal_id: Filter by journal IDs.
         issue_id: Filter by issue ID.
         year: Filter by publication year from issues.
         area: Filter by journal area (multiple allowed).
@@ -1457,9 +1492,10 @@ async def list_articles_from_articles(
     join_search = q is not None and q.strip() != ""
     join_issues = year is not None
 
-    if journal_id is not None:
-        where_clauses.append("a.journal_id = ?")
-        params.append(journal_id)
+    if journal_id:
+        placeholders = ", ".join(["?"] * len(journal_id))
+        where_clauses.append(f"a.journal_id IN ({placeholders})")
+        params.extend(journal_id)
     if issue_id is not None:
         where_clauses.append("a.issue_id = ?")
         params.append(issue_id)
@@ -1660,7 +1696,7 @@ async def list_articles_from_articles(
 @app.get("/articles", response_model=ArticlePage)
 async def list_articles(
     db: Annotated[aiosqlite.Connection, Depends(get_db_dependency)],
-    journal_id: int | None = Query(default=None, ge=0),
+    journal_id: Annotated[list[int] | None, Query()] = None,
     issue_id: int | None = Query(default=None, ge=0),
     year: int | None = Query(default=None, ge=0),
     area: Annotated[list[str] | None, Query()] = None,
@@ -1683,7 +1719,7 @@ async def list_articles(
     List articles with filtering, FTS, and sorting.
 
     Args:
-        journal_id: Filter by journal ID.
+        journal_id: Filter by journal IDs.
         issue_id: Filter by issue ID.
         year: Filter by publication year from issues.
         area: Filter by journal area (multiple allowed).

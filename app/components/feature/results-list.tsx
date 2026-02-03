@@ -21,7 +21,7 @@ export function ResultsList() {
 
   const [q] = useQueryState('q', parseAsString);
   const [areas] = useQueryState('area', parseAsArrayOf(parseAsString));
-  const [ranks] = useQueryState('rank', parseAsArrayOf(parseAsString));
+  const [journalIds] = useQueryState('journal_id', parseAsArrayOf(parseAsString));
   const [yearMin] = useQueryState('year_min', parseAsInteger);
   const [yearMax] = useQueryState('year_max', parseAsInteger);
   const searchParams = useSearchParams();
@@ -57,8 +57,8 @@ export function ResultsList() {
   if (areas && areas.length > 0) {
       areas.forEach(a => params.append('area', a));
   }
-  if (ranks && ranks.length > 0) {
-      ranks.forEach(r => params.append('rank', r));
+  if (journalIds && journalIds.length > 0) {
+      journalIds.forEach(id => params.append('journal_id', id));
   }
 
   if (yearMin) params.set('date_from', `${yearMin}-01-01`);

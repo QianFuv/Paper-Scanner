@@ -40,6 +40,11 @@ export interface YearSummary {
   journal_count: number;
 }
 
+export interface JournalOption {
+  journal_id: number;
+  title?: string;
+}
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 export const DEFAULT_DB = 'utd24.sqlite';
 const DB_STORAGE_KEY = 'selected_database';
@@ -125,14 +130,6 @@ export async function getAreas(): Promise<ValueCount[]> {
   return res.json();
 }
 
-export async function getRanks(): Promise<ValueCount[]> {
-  const res = await fetch(withDb('/meta/ranks'));
-  if (!res.ok) {
-    throw new Error('Failed to fetch ranks');
-  }
-  return res.json();
-}
-
 export async function getYears(): Promise<YearSummary[]> {
     const res = await fetch(withDb('/years'));
     if (!res.ok) {
@@ -140,3 +137,11 @@ export async function getYears(): Promise<YearSummary[]> {
     }
     return res.json();
   }
+
+export async function getJournalOptions(): Promise<JournalOption[]> {
+  const res = await fetch(withDb('/meta/journals'));
+  if (!res.ok) {
+    throw new Error('Failed to fetch journals');
+  }
+  return res.json();
+}
