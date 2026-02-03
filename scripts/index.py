@@ -31,6 +31,7 @@ from scripts.utility.weipu_api import WeipuAPISelectolax
 
 DEFAULT_LIBRARY_ID = "3050"
 WEIPU_LIBRARY_ID = "-1"
+FALLBACK_LIBRARIES = ["215", "866", "72", "853", "554", "371", "230"]
 BASE_URL = "https://api.thirdiron.com/v2"
 TOKEN_EXPIRY_BUFFER = 300
 DB_TIMEOUT_SECONDS = 30
@@ -1004,6 +1005,52 @@ class BrowZineAPIClient:
             return data["data"]
         return None
 
+    async def search_by_issn(self, issn: str, library_id: str) -> dict[str, Any] | None:
+        """
+        Search for a journal by ISSN within a specific library.
+
+        Args:
+            issn: Journal ISSN (with or without hyphen).
+            library_id: Library ID for the request.
+
+        Returns:
+            Journal payload or None when unavailable.
+        """
+        url = f"{BASE_URL}/libraries/{library_id}/search"
+        params = {"client": "bzweb", "query": issn}
+        data = await self._get_json(
+            url,
+            library_id,
+            params,
+            accept="application/json, text/javascript, */*; q=0.01",
+        )
+        if data and data.get("data"):
+            return data["data"][0]
+        return None
+
+    async def get_current_issue(
+        self, journal_id: int, library_id: str
+    ) -> dict[str, Any] | None:
+        """
+        Fetch the current issue for a journal.
+
+        Args:
+            journal_id: BrowZine journal ID.
+            library_id: Library ID for the request.
+
+        Returns:
+            Issue payload or None when unavailable.
+        """
+        url = f"{BASE_URL}/libraries/{library_id}/journals/{journal_id}/issues/current"
+        params = {"client": "bzweb"}
+        data = await self._get_json(url, library_id, params)
+        if not data:
+            return None
+        issues = data.get("issues", [])
+        if issues:
+            return issues[0]
+        return None
+
     async def get_publication_years(
         self, journal_id: int, library_id: str
     ) -> list[int] | None:
@@ -1122,6 +1169,95 @@ class BrowZineAPIClient:
             None.
         """
         await self._client.aclose()
+
+
+async def validate_single_journal(
+    client: BrowZineAPIClient, journal_id: int, library_id: str
+) -> tuple[bool, str]:
+    """
+    Validate a single journal for availability and content.
+
+    Args:
+        client: BrowZine API client instance.
+        journal_id: BrowZine journal ID.
+        library_id: Library ID to validate in.
+
+    Returns:
+        Tuple of (is_valid, reason).
+    """
+    journal_info = await client.get_journal_info(journal_id, library_id)
+    if not journal_info:
+        return False, "Journal not found"
+
+    attributes = journal_info.get("attributes", {})
+    available = attributes.get("available", False)
+    if not available:
+        return False, "Journal not available"
+
+    current_issue = await client.get_current_issue(journal_id, library_id)
+    if not current_issue:
+        return False, "No current issue found"
+
+    issue_id = to_int(current_issue.get("id"))
+    if not issue_id:
+        return False, "Issue has no ID"
+
+    articles = await client.get_articles_from_issue(issue_id, library_id)
+    if not articles:
+        return False, "No articles found in current issue"
+
+    has_actual_content = any(
+        article.get("attributes", {}).get("abstract")
+        or article.get("attributes", {}).get("fullTextFile")
+        for article in articles
+    )
+    if not has_actual_content:
+        return False, "Articles have no actual content"
+
+    return True, "Valid"
+
+
+async def resolve_working_library(
+    client: BrowZineAPIClient,
+    journal_id: int,
+    issn: str | None,
+    library_id: str,
+) -> tuple[int, str, str]:
+    """
+    Resolve a working library for a journal using fallback libraries when needed.
+
+    Args:
+        client: BrowZine API client instance.
+        journal_id: BrowZine journal ID.
+        issn: Journal ISSN for fallback search.
+        library_id: Library ID to try first.
+
+    Returns:
+        Tuple of (resolved_journal_id, resolved_library_id, reason).
+    """
+    is_valid, reason = await validate_single_journal(client, journal_id, library_id)
+    if is_valid:
+        return journal_id, library_id, reason
+
+    if not issn:
+        return journal_id, library_id, reason
+
+    for fallback_lib in FALLBACK_LIBRARIES:
+        if fallback_lib == library_id:
+            continue
+        journal = await client.search_by_issn(issn, fallback_lib)
+        if not journal:
+            continue
+        fallback_id = to_int(journal.get("id"))
+        if not fallback_id:
+            continue
+        is_valid, fallback_reason = await validate_single_journal(
+            client, fallback_id, fallback_lib
+        )
+        if is_valid:
+            return fallback_id, fallback_lib, fallback_reason
+
+    return journal_id, library_id, reason
 
 
 JOURNAL_COLUMNS = [
@@ -2707,6 +2843,73 @@ def load_csv_rows(csv_path: Path) -> list[dict[str, str]]:
     return rows
 
 
+def write_csv_rows(csv_path: Path, rows: list[dict[str, str]]) -> None:
+    """
+    Write CSV rows back to the file.
+
+    Args:
+        csv_path: Path to the CSV file.
+        rows: CSV rows to write.
+
+    Returns:
+        None.
+    """
+    if not rows:
+        return
+    with open(csv_path, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+async def ensure_available_libraries(
+    client: BrowZineAPIClient, csv_path: Path, rows: list[dict[str, str]]
+) -> list[dict[str, str]]:
+    """
+    Validate libraries for CSV rows and apply fallback libraries when needed.
+
+    Args:
+        client: BrowZine API client instance.
+        csv_path: Path to the CSV file.
+        rows: CSV rows to validate.
+
+    Returns:
+        Updated CSV rows.
+    """
+    if not rows:
+        return rows
+
+    updated = False
+    for row in rows:
+        library_id = row.get("library") or DEFAULT_LIBRARY_ID
+        row["library"] = library_id
+        if is_weipu_library(library_id):
+            continue
+        journal_id = to_int(row.get("id"))
+        if not journal_id:
+            continue
+        issn = row.get("issn") or ""
+        resolved_id, resolved_library, reason = await resolve_working_library(
+            client, journal_id, issn, library_id
+        )
+        if resolved_library != library_id or resolved_id != journal_id:
+            row["library"] = resolved_library
+            row["id"] = str(resolved_id)
+            updated = True
+            title = row.get("title", "Unknown")
+            print(
+                f"  - Switched library for {title} "
+                f"(ID: {journal_id} -> {resolved_id}, "
+                f"Lib: {library_id} -> {resolved_library}, "
+                f"Reason: {reason})"
+            )
+
+    if updated:
+        write_csv_rows(csv_path, rows)
+
+    return rows
+
+
 async def writer_main(
     db_path: str, request_queue: Any, response_queues: list[Any]
 ) -> None:
@@ -2959,6 +3162,13 @@ async def export_csv(
         return
 
     print(f"\nProcessing {csv_path.name} -> {db_path.name}")
+    availability_client = BrowZineAPIClient(
+        library_id=DEFAULT_LIBRARY_ID, timeout=timeout
+    )
+    try:
+        rows = await ensure_available_libraries(availability_client, csv_path, rows)
+    finally:
+        await availability_client.aclose()
 
     if processes <= 1:
         client = BrowZineAPIClient(library_id=DEFAULT_LIBRARY_ID, timeout=timeout)
