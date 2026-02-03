@@ -74,10 +74,6 @@ Returns:
 
 Returns a list of journal areas with counts.
 
-`GET /meta/ranks`
-
-Returns a list of journal ranks with counts.
-
 `GET /meta/libraries`
 
 Returns a list of library IDs with counts.
@@ -95,7 +91,6 @@ Returns publication years with issue and journal counts.
 Filters:
 
 - `area`
-- `rank`
 - `library_id`
 - `available` (bool)
 - `has_articles` (bool)
@@ -115,7 +110,7 @@ Sorting fields:
 
 Example:
 
-`/journals?area=Accounting&rank=utd24&available=true&sort=scimago_rank:desc`
+`/journals?area=Accounting&available=true&sort=scimago_rank:desc`
 
 `GET /journals/{journal_id}`
 

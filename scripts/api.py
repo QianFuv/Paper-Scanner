@@ -48,7 +48,6 @@ class JournalRecord(BaseModel):
     has_articles: int | None = None
     source_csv: str | None = None
     area: str | None = None
-    rank: str | None = None
     csv_title: str | None = None
     csv_issn: str | None = None
     csv_library: str | None = None
@@ -790,33 +789,6 @@ async def list_areas(
     return [ValueCount(**row) for row in rows]
 
 
-@app.get("/meta/ranks", response_model=list[ValueCount])
-async def list_ranks(
-    db: Annotated[aiosqlite.Connection, Depends(get_db_dependency)],
-) -> list[ValueCount]:
-    """
-    List distinct journal ranks.
-
-    Args:
-        db: Database connection.
-
-    Returns:
-        Rank values with counts.
-    """
-    rows = await fetch_all(
-        db,
-        """
-        SELECT rank AS value, COUNT(*) AS count
-        FROM journal_meta
-        WHERE rank IS NOT NULL AND rank != ''
-        GROUP BY rank
-        ORDER BY value ASC
-        """,
-        [],
-    )
-    return [ValueCount(**row) for row in rows]
-
-
 @app.get("/meta/libraries", response_model=list[ValueCount])
 async def list_libraries(
     db: Annotated[aiosqlite.Connection, Depends(get_db_dependency)],
@@ -878,7 +850,6 @@ async def list_years(
 async def list_journals(
     db: Annotated[aiosqlite.Connection, Depends(get_db_dependency)],
     area: str | None = Query(default=None),
-    rank: str | None = Query(default=None),
     library_id: str | None = Query(default=None),
     available: bool | None = Query(default=None),
     has_articles: bool | None = Query(default=None),
@@ -894,7 +865,6 @@ async def list_journals(
 
     Args:
         area: Filter by CSV area.
-        rank: Filter by CSV rank.
         library_id: Filter by library_id from journals.
         available: Filter by availability flag.
         has_articles: Filter by has_articles flag.
@@ -915,9 +885,6 @@ async def list_journals(
     if area:
         where_clauses.append("m.area = ?")
         params.append(area)
-    if rank:
-        where_clauses.append("m.rank = ?")
-        params.append(rank)
     if library_id:
         where_clauses.append("j.library_id = ?")
         params.append(library_id)
@@ -970,7 +937,6 @@ async def list_journals(
             j.has_articles,
             m.source_csv,
             m.area,
-            m.rank,
             m.csv_title,
             m.csv_issn,
             m.csv_library
@@ -1020,7 +986,6 @@ async def get_journal(
             j.has_articles,
             m.source_csv,
             m.area,
-            m.rank,
             m.csv_title,
             m.csv_issn,
             m.csv_library
@@ -1198,7 +1163,6 @@ async def list_articles_from_listing(
     issue_id: int | None,
     year: int | None,
     area: list[str] | None,
-    rank: list[str] | None,
     in_press: bool | None,
     open_access: bool | None,
     suppressed: bool | None,
@@ -1224,7 +1188,6 @@ async def list_articles_from_listing(
         issue_id: Filter by issue ID.
         year: Filter by publication year from issues.
         area: Filter by journal area (multiple allowed).
-        rank: Filter by journal rank (multiple allowed).
         in_press: Filter by in_press flag.
         open_access: Filter by open_access flag.
         suppressed: Filter by suppressed flag.
@@ -1257,10 +1220,6 @@ async def list_articles_from_listing(
         placeholders = ", ".join(["?"] * len(area))
         where_clauses.append(f"l.area IN ({placeholders})")
         params.extend(area)
-    if rank:
-        placeholders = ", ".join(["?"] * len(rank))
-        where_clauses.append(f"l.rank IN ({placeholders})")
-        params.extend(rank)
     if in_press is not None:
         where_clauses.append("l.in_press = ?")
         params.append(1 if in_press else 0)
@@ -1448,7 +1407,6 @@ async def list_articles_from_articles(
     issue_id: int | None,
     year: int | None,
     area: list[str] | None,
-    rank: list[str] | None,
     in_press: bool | None,
     open_access: bool | None,
     suppressed: bool | None,
@@ -1474,7 +1432,6 @@ async def list_articles_from_articles(
         issue_id: Filter by issue ID.
         year: Filter by publication year from issues.
         area: Filter by journal area (multiple allowed).
-        rank: Filter by journal rank (multiple allowed).
         in_press: Filter by in_press flag.
         open_access: Filter by open_access flag.
         suppressed: Filter by suppressed flag.
@@ -1496,9 +1453,7 @@ async def list_articles_from_articles(
     """
     where_clauses: list[str] = []
     params: list[Any] = []
-    join_meta = (area is not None and len(area) > 0) or (
-        rank is not None and len(rank) > 0
-    )
+    join_meta = area is not None and len(area) > 0
     join_search = q is not None and q.strip() != ""
     join_issues = year is not None
 
@@ -1512,10 +1467,6 @@ async def list_articles_from_articles(
         placeholders = ", ".join(["?"] * len(area))
         where_clauses.append(f"m.area IN ({placeholders})")
         params.extend(area)
-    if rank:
-        placeholders = ", ".join(["?"] * len(rank))
-        where_clauses.append(f"m.rank IN ({placeholders})")
-        params.extend(rank)
     if in_press is not None:
         where_clauses.append("a.in_press = ?")
         params.append(1 if in_press else 0)
@@ -1713,7 +1664,6 @@ async def list_articles(
     issue_id: int | None = Query(default=None, ge=0),
     year: int | None = Query(default=None, ge=0),
     area: Annotated[list[str] | None, Query()] = None,
-    rank: Annotated[list[str] | None, Query()] = None,
     in_press: bool | None = Query(default=None),
     open_access: bool | None = Query(default=None),
     suppressed: bool | None = Query(default=None),
@@ -1737,7 +1687,6 @@ async def list_articles(
         issue_id: Filter by issue ID.
         year: Filter by publication year from issues.
         area: Filter by journal area (multiple allowed).
-        rank: Filter by journal rank (multiple allowed).
         in_press: Filter by in_press flag.
         open_access: Filter by open_access flag.
         suppressed: Filter by suppressed flag.
@@ -1766,7 +1715,6 @@ async def list_articles(
             issue_id,
             year,
             area,
-            rank,
             in_press,
             open_access,
             suppressed,
@@ -1790,7 +1738,6 @@ async def list_articles(
         issue_id,
         year,
         area,
-        rank,
         in_press,
         open_access,
         suppressed,

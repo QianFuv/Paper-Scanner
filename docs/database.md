@@ -28,12 +28,11 @@ Core journal metadata from BrowZine.
 - `has_articles` INTEGER (0/1)
 
 ### `journal_meta`
-CSV list metadata for filtering (area, rank, etc). One row per journal.
+CSV list metadata for filtering (area, etc). One row per journal.
 
 - `journal_id` INTEGER PRIMARY KEY (FK -> `journals.journal_id`, ON DELETE CASCADE)
 - `source_csv` TEXT NOT NULL
 - `area` TEXT
-- `rank` TEXT
 - `csv_title` TEXT
 - `csv_issn` TEXT
 - `csv_library` TEXT
@@ -133,13 +132,13 @@ Note: `rowid` is set to `article_id` when inserting into this table.
 
 ## Query Examples
 
-Filter by list area and rank:
+Filter by list area:
 
 ```sql
-SELECT j.title, m.area, m.rank
+SELECT j.title, m.area
 FROM journals j
 JOIN journal_meta m ON j.journal_id = m.journal_id
-WHERE m.area = 'Accounting' AND m.rank = 'utd24';
+WHERE m.area = 'Accounting';
 ```
 
 Find open-access articles for a journal in a year:

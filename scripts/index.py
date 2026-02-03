@@ -1148,7 +1148,6 @@ META_COLUMNS = [
     "journal_id",
     "source_csv",
     "area",
-    "rank",
     "csv_title",
     "csv_issn",
     "csv_library",
@@ -1239,7 +1238,6 @@ ARTICLE_LISTING_COLUMNS = [
     "doi",
     "pmid",
     "area",
-    "rank",
 ]
 
 ARTICLE_LISTING_BATCH_SIZE = 500
@@ -1286,7 +1284,6 @@ async def init_db(db: aiosqlite.Connection) -> None:
             journal_id INTEGER PRIMARY KEY,
             source_csv TEXT NOT NULL,
             area TEXT,
-            rank TEXT,
             csv_title TEXT,
             csv_issn TEXT,
             csv_library TEXT,
@@ -1379,7 +1376,6 @@ async def init_db(db: aiosqlite.Connection) -> None:
             doi TEXT,
             pmid TEXT,
             area TEXT,
-            rank TEXT,
             FOREIGN KEY (journal_id) REFERENCES journals(journal_id)
                 ON DELETE CASCADE,
             FOREIGN KEY (issue_id) REFERENCES issues(issue_id)
@@ -1449,17 +1445,9 @@ async def init_db(db: aiosqlite.Connection) -> None:
         db, "CREATE INDEX IF NOT EXISTS idx_journal_meta_area ON journal_meta(area);"
     )
     await execute_with_retry(
-        db, "CREATE INDEX IF NOT EXISTS idx_journal_meta_rank ON journal_meta(rank);"
-    )
-    await execute_with_retry(
         db,
         "CREATE INDEX IF NOT EXISTS idx_journal_meta_area_journal "
         "ON journal_meta(area, journal_id);",
-    )
-    await execute_with_retry(
-        db,
-        "CREATE INDEX IF NOT EXISTS idx_journal_meta_rank_journal "
-        "ON journal_meta(rank, journal_id);",
     )
     await execute_with_retry(
         db,
@@ -1546,10 +1534,6 @@ async def init_db(db: aiosqlite.Connection) -> None:
     await execute_with_retry(
         db,
         "CREATE INDEX IF NOT EXISTS idx_article_listing_area ON article_listing(area);",
-    )
-    await execute_with_retry(
-        db,
-        "CREATE INDEX IF NOT EXISTS idx_article_listing_rank ON article_listing(rank);",
     )
     await execute_with_retry(
         db,
@@ -1654,7 +1638,6 @@ def build_meta_record(
         "journal_id": journal_id,
         "source_csv": csv_path.name,
         "area": csv_row.get("area"),
-        "rank": csv_row.get("rank"),
         "csv_title": csv_row.get("title"),
         "csv_issn": csv_row.get("issn"),
         "csv_library": csv_row.get("library"),
@@ -2101,8 +2084,7 @@ def build_article_listing_upsert(where_sql: str) -> str:
         a.within_library_holdings,
         a.doi,
         a.pmid,
-        m.area,
-        m.rank
+        m.area
     FROM articles a
     LEFT JOIN issues i ON i.issue_id = a.issue_id
     LEFT JOIN journal_meta m ON m.journal_id = a.journal_id
