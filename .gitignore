@@ -5,6 +5,8 @@
 /*.egg-info
 /backup
 /data/index
+/data/push/subscriptions.json
+/data/push_state
 /AGENTS.md
 /CLAUDE.md
 app/config/auth.yaml

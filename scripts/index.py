@@ -16,6 +16,7 @@ import multiprocessing as mp
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 import time
 from collections.abc import Iterable
@@ -40,6 +41,7 @@ DB_RETRY_BASE_DELAY = 0.5
 SQLITE_INT_MAX = (1 << 63) - 1
 SQLITE_INT_MIN = -(1 << 63)
 SIMPLE_TOKENIZER_ENV = "SIMPLE_TOKENIZER_PATH"
+NOTIFY_STATE_DIR = "data/push_state"
 
 
 async def execute_with_retry(
@@ -2405,7 +2407,227 @@ async def mark_listing_ready(db: aiosqlite.Connection) -> None:
         """,
         (timestamp,),
     )
-    await commit_with_retry(db)
+
+
+def normalize_issue_key(journal_id: int, issue_id: int) -> str:
+    """
+    Build a stable issue key string.
+
+    Args:
+        journal_id: Journal identifier.
+        issue_id: Issue identifier.
+
+    Returns:
+        Normalized issue key.
+    """
+    return f"{journal_id}:{issue_id}"
+
+
+def collect_article_snapshot(
+    db_path: Path,
+) -> tuple[dict[str, set[int]], dict[int, set[int]]]:
+    """
+    Collect article snapshot grouped by issue and in-press journal.
+
+    Args:
+        db_path: SQLite database path.
+
+    Returns:
+        Tuple of issue map and in-press map.
+    """
+    issue_map: dict[str, set[int]] = {}
+    inpress_map: dict[int, set[int]] = {}
+    with sqlite3.connect(db_path) as db:
+        cursor = db.execute(
+            """
+            SELECT
+                article_id,
+                journal_id,
+                issue_id,
+                COALESCE(in_press, 0)
+            FROM articles
+            """
+        )
+        rows = cursor.fetchall()
+
+    for article_id_raw, journal_id_raw, issue_id_raw, in_press_raw in rows:
+        article_id = to_int(article_id_raw)
+        journal_id = to_int(journal_id_raw)
+        issue_id = to_int(issue_id_raw)
+        in_press_flag = bool(to_int(in_press_raw) or 0)
+        if article_id is None or journal_id is None:
+            continue
+        if issue_id is not None:
+            issue_key = normalize_issue_key(journal_id, issue_id)
+            issue_set = issue_map.setdefault(issue_key, set())
+            issue_set.add(article_id)
+            continue
+        if not in_press_flag:
+            continue
+        inpress_set = inpress_map.setdefault(journal_id, set())
+        inpress_set.add(article_id)
+
+    return issue_map, inpress_map
+
+
+def compute_changed_group_keys(
+    before_issue_map: dict[str, set[int]],
+    after_issue_map: dict[str, set[int]],
+    before_inpress_map: dict[int, set[int]],
+    after_inpress_map: dict[int, set[int]],
+) -> tuple[list[str], list[int], dict[str, Any]]:
+    """
+    Compute changed issue and in-press groups from snapshots.
+
+    Args:
+        before_issue_map: Snapshot before update.
+        after_issue_map: Snapshot after update.
+        before_inpress_map: In-press snapshot before update.
+        after_inpress_map: In-press snapshot after update.
+
+    Returns:
+        Changed issue keys, changed in-press journal ids, and summary.
+    """
+    issue_keys: set[str] = set(before_issue_map) | set(after_issue_map)
+    changed_issue_keys = sorted(
+        [
+            key
+            for key in issue_keys
+            if before_issue_map.get(key, set()) != after_issue_map.get(key, set())
+        ],
+        key=lambda item: tuple(int(part) for part in item.split(":", maxsplit=1)),
+    )
+
+    inpress_keys: set[int] = set(before_inpress_map) | set(after_inpress_map)
+    changed_inpress_ids = sorted(
+        [
+            journal_id
+            for journal_id in inpress_keys
+            if before_inpress_map.get(journal_id, set())
+            != after_inpress_map.get(journal_id, set())
+        ]
+    )
+
+    added_article_ids: set[int] = set()
+    removed_article_ids: set[int] = set()
+    changed_issue_details: list[dict[str, Any]] = []
+    for issue_key in changed_issue_keys:
+        before_set = before_issue_map.get(issue_key, set())
+        after_set = after_issue_map.get(issue_key, set())
+        added = sorted(after_set - before_set)
+        removed = sorted(before_set - after_set)
+        added_article_ids.update(added)
+        removed_article_ids.update(removed)
+        changed_issue_details.append(
+            {
+                "issue_key": issue_key,
+                "before_count": len(before_set),
+                "after_count": len(after_set),
+                "added_article_ids": added,
+                "removed_article_ids": removed,
+            }
+        )
+
+    changed_inpress_details: list[dict[str, Any]] = []
+    for journal_id in changed_inpress_ids:
+        before_set = before_inpress_map.get(journal_id, set())
+        after_set = after_inpress_map.get(journal_id, set())
+        added = sorted(after_set - before_set)
+        removed = sorted(before_set - after_set)
+        added_article_ids.update(added)
+        removed_article_ids.update(removed)
+        changed_inpress_details.append(
+            {
+                "journal_id": journal_id,
+                "before_count": len(before_set),
+                "after_count": len(after_set),
+                "added_article_ids": added,
+                "removed_article_ids": removed,
+            }
+        )
+
+    summary = {
+        "changed_issue_count": len(changed_issue_keys),
+        "changed_inpress_count": len(changed_inpress_ids),
+        "added_article_count": len(added_article_ids),
+        "removed_article_count": len(removed_article_ids),
+        "added_article_ids": sorted(added_article_ids),
+        "removed_article_ids": sorted(removed_article_ids),
+        "issues": changed_issue_details,
+        "inpress": changed_inpress_details,
+    }
+    return changed_issue_keys, changed_inpress_ids, summary
+
+
+def write_change_manifest(
+    db_path: Path,
+    changed_issue_keys: list[str],
+    changed_inpress_ids: list[int],
+    summary: dict[str, Any],
+) -> Path:
+    """
+    Write change manifest used by notification task.
+
+    Args:
+        db_path: Database path.
+        changed_issue_keys: Changed issue keys.
+        changed_inpress_ids: Changed in-press journal ids.
+        summary: Change summary details.
+
+    Returns:
+        Manifest file path.
+    """
+    now = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    state_dir = db_path.parent.parent / "push_state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = state_dir / f"{db_path.stem}.changes.json"
+    payload = {
+        "run_id": now,
+        "generated_at": now,
+        "db_name": db_path.name,
+        "db_path": str(db_path),
+        "changed_issue_keys": changed_issue_keys,
+        "changed_inpress_journal_ids": changed_inpress_ids,
+        "summary": summary,
+    }
+    tmp_path = manifest_path.with_name(f"{manifest_path.name}.tmp")
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    tmp_path.replace(manifest_path)
+    return manifest_path
+
+
+def run_notify_for_manifest(
+    db_path: Path,
+    manifest_path: Path,
+    dry_run: bool,
+) -> int:
+    """
+    Invoke notify command with change manifest.
+
+    Args:
+        db_path: Database path.
+        manifest_path: Change manifest path.
+        dry_run: Whether to run notify in dry-run mode.
+
+    Returns:
+        Notify process return code.
+    """
+    command = [
+        "uv",
+        "run",
+        "notify",
+        "--db",
+        db_path.name,
+        "--changes-file",
+        str(manifest_path),
+        "--state-dir",
+        NOTIFY_STATE_DIR,
+    ]
+    if dry_run:
+        command.append("--dry-run")
+    result = subprocess.run(command, check=False)
+    return int(result.returncode)
 
 
 async def fetch_issue_articles(
@@ -3302,9 +3524,18 @@ async def async_main(args: argparse.Namespace) -> None:
     print(f"Request workers: {args.workers}")
     print(f"Process workers: {args.processes}")
     print(f"Issue batch size: {issue_batch_size}")
+    if args.update:
+        print("Change tracking: enabled (article-level diff)")
+
+    manifest_records: list[tuple[Path, Path]] = []
 
     for csv_path in csv_paths:
         db_path = index_dir / f"{csv_path.stem}.sqlite"
+        before_issue_map: dict[str, set[int]] = {}
+        before_inpress_map: dict[int, set[int]] = {}
+        if args.update and db_path.exists():
+            before_issue_map, before_inpress_map = collect_article_snapshot(db_path)
+
         await export_csv(
             csv_path,
             db_path,
@@ -3315,6 +3546,45 @@ async def async_main(args: argparse.Namespace) -> None:
             args.resume,
             args.update,
         )
+
+        if args.update and db_path.exists():
+            after_issue_map, after_inpress_map = collect_article_snapshot(db_path)
+            changed_issue_keys, changed_inpress_ids, summary = (
+                compute_changed_group_keys(
+                    before_issue_map,
+                    after_issue_map,
+                    before_inpress_map,
+                    after_inpress_map,
+                )
+            )
+            manifest_path = write_change_manifest(
+                db_path,
+                changed_issue_keys,
+                changed_inpress_ids,
+                summary,
+            )
+            manifest_records.append((db_path, manifest_path))
+            print(
+                "  Change manifest:",
+                manifest_path,
+                f"(issues={len(changed_issue_keys)}, "
+                f"inpress={len(changed_inpress_ids)}, "
+                f"added={summary['added_article_count']}, "
+                f"removed={summary['removed_article_count']})",
+            )
+
+    if args.notify and args.update:
+        for db_path, manifest_path in manifest_records:
+            print(f"Running notify for {db_path.name}")
+            return_code = run_notify_for_manifest(
+                db_path,
+                manifest_path,
+                args.notify_dry_run,
+            )
+            if return_code != 0:
+                print(
+                    f"  - notify failed for {db_path.name} with exit code {return_code}"
+                )
 
     print("\nDone.")
 
@@ -3375,7 +3645,22 @@ def main() -> None:
         default=False,
         help="Incrementally update existing years and journals",
     )
+    parser.add_argument(
+        "--notify",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Run notify after update using the generated change manifest",
+    )
+    parser.add_argument(
+        "--notify-dry-run",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Run notify with --dry-run when --notify is enabled",
+    )
     args = parser.parse_args()
+
+    if args.notify and not args.update:
+        parser.error("--notify requires --update")
 
     asyncio.run(async_main(args))
 

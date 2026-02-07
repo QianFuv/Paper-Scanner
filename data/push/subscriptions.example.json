@@ -1,0 +1,28 @@
+{
+  "global": {
+    "openrouter_api_key_env": "OPENROUTER_API_KEY",
+    "pushplus_token_env": "PUSHPLUS_TOKEN",
+    "pushplus_channel": "cp",
+    "pushplus_template": "markdown",
+    "pushplus_topic": "",
+    "pushplus_option": ""
+  },
+  "defaults": {
+    "max_candidates": 120,
+    "openrouter_model": "arcee-ai/trinity-large-preview:free",
+    "temperature": 0.2
+  },
+  "users": [
+    {
+      "id": "alice",
+      "name": "Alice",
+      "enabled": true,
+      "to": "zhangsan,lisi",
+      "keywords": ["earnings management", "disclosure quality"],
+      "directions": ["accounting research", "capital markets"],
+      "excluded_keywords": ["sports", "music"],
+      "template": "markdown",
+      "topic": ""
+    }
+  ]
+}
