@@ -10,17 +10,18 @@ The notification task performs the following steps:
 2. Compares current issue and in-press article counts with the last snapshot in `data/push_state/<db>.json`.
 3. Builds pending issue and in-press sets for changed groups.
 4. Loads subscribers from `data/push/subscriptions.json`.
-5. Uses OpenRouter with the OpenAI Python SDK to rank relevant candidate articles.
+5. Uses SiliconFlow with the OpenAI Python SDK to rank relevant candidate articles.
 6. Sends one digest message per subscriber through PushPlus.
 7. Updates the state snapshot and dedupe records.
 
 Each push is capped at 20 articles and 18000 characters. Each article item includes title, journal, date, DOI, and abstract preview.
-PushPlus requests use payload fields `token`, `title`, `content`, `channel`, `template`, and `to`, plus optional `topic` and `option`.
+PushPlus requests use payload fields `token`, `title`, `content`, `channel`, and `template`, plus optional `to`, `topic`, and `option`.
+The pipeline no longer applies `excluded_keywords`. It prioritizes articles by AI ranking and keyword/direction phrase matches, then packs as many as possible under the 18000-character limit.
 
 ## Prerequisites
 
-- OpenRouter API key and PushPlus token should be configured in the `global` section.
-- You can use direct values or environment-variable indirection fields ending with `_env`.
+- SiliconFlow API key should be configured in the `global` section.
+- PushPlus token should be configured per user in each user object.
 
 ## Subscription File
 
@@ -30,9 +31,9 @@ Copy it to `data/push/subscriptions.json` and update user entries.
 
 The file is organized as:
 
-- `global`: shared credentials and PushPlus defaults.
+- `global`: shared SiliconFlow key and PushPlus defaults.
 - `defaults`: AI selection defaults.
-- `users`: per-subscriber preferences, where each user must provide `to`.
+- `users`: per-subscriber preferences, where each user must provide `pushplus_token`.
 
 ## Command
 
@@ -46,7 +47,7 @@ Common options:
 
 - `--subscriptions data/push/subscriptions.json`
 - `--state-dir data/push_state`
-- `--openrouter-model arcee-ai/trinity-large-preview:free`
+- `--siliconflow-model deepseek-ai/DeepSeek-V3`
 - `--max-candidates 120`
 - `--timeout 60`
 - `--retries 3`
