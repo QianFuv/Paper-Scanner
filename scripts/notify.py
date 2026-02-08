@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -32,35 +31,6 @@ DEFAULT_SILICONFLOW_MODEL = "deepseek-ai/DeepSeek-V3"
 MAX_ARTICLES_PER_PUSH = 20
 MAX_PUSH_CONTENT_LENGTH = 18000
 MAX_AI_SELECTION_ROUNDS = 5
-
-SUMMARY_STOPWORDS = {
-    "about",
-    "after",
-    "against",
-    "among",
-    "analysis",
-    "article",
-    "based",
-    "between",
-    "can",
-    "data",
-    "effects",
-    "from",
-    "into",
-    "journal",
-    "more",
-    "paper",
-    "papers",
-    "results",
-    "research",
-    "shows",
-    "study",
-    "their",
-    "these",
-    "this",
-    "using",
-    "with",
-}
 
 
 @dataclass(frozen=True)
@@ -1519,68 +1489,6 @@ def build_message_title(db_name: str, run_id: str) -> str:
     return f"Paper Scanner Weekly Update [{db_name}] {run_id[:10]}"
 
 
-def build_content_focused_intro(
-    summary: str,
-    selections: list[RankedSelection],
-    candidates_by_id: dict[int, ArticleCandidate],
-) -> str:
-    """
-    Build a content-focused intro paragraph for selected papers.
-
-    Args:
-        summary: Model-provided summary.
-        selections: Accepted selections.
-        candidates_by_id: Candidate map.
-
-    Returns:
-        Intro paragraph text.
-    """
-    cleaned_summary = summary.strip()
-    if cleaned_summary:
-        return cleaned_summary
-
-    focus_candidates = [
-        candidates_by_id[item.article_id]
-        for item in selections[:MAX_ARTICLES_PER_PUSH]
-        if item.article_id in candidates_by_id
-    ]
-    if not focus_candidates:
-        return (
-            "This digest highlights newly selected papers aligned with your interests."
-        )
-
-    token_counter: dict[str, int] = {}
-    for candidate in focus_candidates:
-        source = f"{candidate.title} {candidate.abstract}".lower()
-        for token in re.findall(r"[a-z][a-z0-9\-]{2,}", source):
-            if token in SUMMARY_STOPWORDS:
-                continue
-            token_counter[token] = token_counter.get(token, 0) + 1
-
-    top_terms = [
-        token
-        for token, _ in sorted(
-            token_counter.items(),
-            key=lambda item: (-item[1], item[0]),
-        )[:6]
-    ]
-
-    journal_titles = sorted(
-        {
-            candidate.journal_title.strip()
-            for candidate in focus_candidates
-            if candidate.journal_title.strip()
-        }
-    )
-    journals_text = ", ".join(journal_titles[:3])
-    terms_text = ", ".join(top_terms) if top_terms else "core topic themes"
-    return (
-        f"This digest focuses on {len(focus_candidates)} selected papers. "
-        f"The main content themes include {terms_text}. "
-        f"The selected work is concentrated in journals such as {journals_text}."
-    )
-
-
 def build_markdown_content(
     db_name: str,
     run_id: str,
@@ -1609,7 +1517,7 @@ def build_markdown_content(
         f"- Database: `{db_name}`",
         f"- Run ID: `{run_id}`",
     ]
-    intro_text = build_content_focused_intro(summary, selections, candidates_by_id)
+    intro_text = summary.strip()
     if intro_text:
         base_lines.extend(["", f"{intro_text}"])
 
