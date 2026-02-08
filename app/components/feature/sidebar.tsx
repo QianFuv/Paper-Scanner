@@ -130,6 +130,9 @@ export function Sidebar({ className }: { className?: string }) {
   };
 
   const [journalSearch, setJournalSearch] = useState('');
+  const isMobile =
+    typeof window !== 'undefined' &&
+    window.matchMedia('(max-width: 767px)').matches;
 
   const filteredJournalOptions = useMemo(() => {
     if (!journalOptions) {
@@ -272,14 +275,17 @@ export function Sidebar({ className }: { className?: string }) {
                               )}
                           </Button>
                       </PopoverTrigger>
-                      <PopoverContent className="w-72 p-3">
+                      <PopoverContent
+                          className="w-72 p-3"
+                          usePortal={!isMobile}
+                      >
                           <Input
                               value={journalSearch}
                               onChange={(event) => setJournalSearch(event.target.value)}
                               placeholder="Search journals"
                               className="h-8"
                           />
-                          <ScrollArea className="mt-2 h-60">
+                          <ScrollArea className="mt-2 h-60 touch-pan-y">
                               <div className="space-y-2">
                                   {filteredJournalOptions.map((option) => {
                                       const id = String(option.journal_id);

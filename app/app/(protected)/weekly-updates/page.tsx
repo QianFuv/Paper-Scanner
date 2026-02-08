@@ -1,7 +1,7 @@
 ﻿'use client';
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -319,6 +319,14 @@ export default function WeeklyUpdatesPage() {
     return matched;
   }, [searchedArticles, searchQuery, selectedJournal]);
 
+  useEffect(() => {
+    const listContainer = document.getElementById('weekly-articles-scroll-container');
+    if (!listContainer) {
+      return;
+    }
+    listContainer.scrollTop = 0;
+  }, [effectiveSelectedDb, effectiveSelectedJournalId]);
+
   const totalDatabases = weeklyData?.databases.length ?? 0;
   const totalArticles = useMemo(() => {
     if (!weeklyData) {
@@ -451,7 +459,10 @@ export default function WeeklyUpdatesPage() {
                       : 'Select a journal on the left'}
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="h-[calc(100%-88px)] space-y-3 overflow-y-auto">
+                <CardContent
+                  id="weekly-articles-scroll-container"
+                  className="h-[calc(100%-88px)] space-y-3 overflow-y-auto"
+                >
                   {!selectedJournal && (
                     <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
                       Choose a journal to view newly indexed papers.

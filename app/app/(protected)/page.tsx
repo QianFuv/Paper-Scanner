@@ -2,7 +2,12 @@ import { Sidebar } from "@/components/feature/sidebar";
 import { SearchBar } from "@/components/feature/search-bar";
 import { ResultsList } from "@/components/feature/results-list";
 import { WeeklyUpdatesFab } from "@/components/feature/weekly-updates-fab";
-import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Menu } from "lucide-react";
 
@@ -28,6 +33,7 @@ export default function Home() {
                 className="md:hidden h-full w-[85vw] max-w-xs p-0 gap-0 rounded-none left-0 top-0 translate-x-0 translate-y-0"
                 showCloseButton
               >
+                <DialogTitle className="sr-only">Filters</DialogTitle>
                 <Sidebar className="w-full h-full" />
               </DialogContent>
             </Dialog>
