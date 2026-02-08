@@ -33,6 +33,7 @@ MAX_LIMIT = 200
 MAX_WEEKLY_RANGE_DAYS = 31
 SIMPLE_TOKENIZER_ENV = "SIMPLE_TOKENIZER_PATH"
 WEIPU_LIBRARY_ID = "-1"
+API_PREFIX = "/api"
 
 
 class JournalRecord(BaseModel):
@@ -276,8 +277,8 @@ class CacheControlMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
-        is_articles = request.url.path.startswith("/articles")
-        is_meta = request.url.path.startswith("/meta")
+        is_articles = request.url.path.startswith(f"{API_PREFIX}/articles")
+        is_meta = request.url.path.startswith(f"{API_PREFIX}/meta")
         if is_articles or is_meta:
             response.headers["Cache-Control"] = (
                 "public, max-age=300, stale-while-revalidate=600"
@@ -813,7 +814,7 @@ ARTICLE_SORT_FIELDS = {
 }
 
 
-@app.get("/health")
+@app.get(f"{API_PREFIX}/health")
 async def health() -> dict[str, str]:
     """
     Health check endpoint.
@@ -824,7 +825,7 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/meta/databases", response_model=list[str])
+@app.get(f"{API_PREFIX}/meta/databases", response_model=list[str])
 async def list_databases() -> list[str]:
     """
     List available SQLite databases.
@@ -1106,7 +1107,7 @@ async def fetch_articles_by_ids(
     return [WeeklyArticleRecord(**row) for row in ordered_rows]
 
 
-@app.get("/weekly-updates", response_model=WeeklyUpdatesResponse)
+@app.get(f"{API_PREFIX}/weekly-updates", response_model=WeeklyUpdatesResponse)
 async def get_weekly_updates(
     window_days: int = Query(default=7, ge=1, le=MAX_WEEKLY_RANGE_DAYS),
 ) -> WeeklyUpdatesResponse:
@@ -1209,7 +1210,7 @@ async def get_weekly_updates(
     )
 
 
-@app.get("/meta/areas", response_model=list[ValueCount])
+@app.get(f"{API_PREFIX}/meta/areas", response_model=list[ValueCount])
 async def list_areas(
     db: Annotated[aiosqlite.Connection, Depends(get_db_dependency)],
 ) -> list[ValueCount]:
@@ -1236,7 +1237,7 @@ async def list_areas(
     return [ValueCount(**row) for row in rows]
 
 
-@app.get("/meta/journals", response_model=list[JournalOption])
+@app.get(f"{API_PREFIX}/meta/journals", response_model=list[JournalOption])
 async def list_journal_options(
     db: Annotated[aiosqlite.Connection, Depends(get_db_dependency)],
 ) -> list[JournalOption]:
@@ -1261,7 +1262,7 @@ async def list_journal_options(
     return [JournalOption(**row) for row in rows]
 
 
-@app.get("/meta/libraries", response_model=list[ValueCount])
+@app.get(f"{API_PREFIX}/meta/libraries", response_model=list[ValueCount])
 async def list_libraries(
     db: Annotated[aiosqlite.Connection, Depends(get_db_dependency)],
 ) -> list[ValueCount]:
@@ -1288,7 +1289,7 @@ async def list_libraries(
     return [ValueCount(**row) for row in rows]
 
 
-@app.get("/years", response_model=list[YearSummary])
+@app.get(f"{API_PREFIX}/years", response_model=list[YearSummary])
 async def list_years(
     db: Annotated[aiosqlite.Connection, Depends(get_db_dependency)],
 ) -> list[YearSummary]:
@@ -1318,7 +1319,7 @@ async def list_years(
     return [YearSummary(**row) for row in rows]
 
 
-@app.get("/journals", response_model=JournalPage)
+@app.get(f"{API_PREFIX}/journals", response_model=JournalPage)
 async def list_journals(
     db: Annotated[aiosqlite.Connection, Depends(get_db_dependency)],
     area: str | None = Query(default=None),
@@ -1427,7 +1428,7 @@ async def list_journals(
     )
 
 
-@app.get("/journals/{journal_id}", response_model=JournalRecord)
+@app.get(f"{API_PREFIX}/journals/{{journal_id}}", response_model=JournalRecord)
 async def get_journal(
     journal_id: int,
     db: Annotated[aiosqlite.Connection, Depends(get_db_dependency)],
@@ -1472,7 +1473,7 @@ async def get_journal(
     return JournalRecord(**row)
 
 
-@app.get("/issues", response_model=IssuePage)
+@app.get(f"{API_PREFIX}/issues", response_model=IssuePage)
 async def list_issues(
     db: Annotated[aiosqlite.Connection, Depends(get_db_dependency)],
     journal_id: int | None = Query(default=None, ge=0),
@@ -1564,7 +1565,7 @@ async def list_issues(
     )
 
 
-@app.get("/issues/{issue_id}", response_model=IssueRecord)
+@app.get(f"{API_PREFIX}/issues/{{issue_id}}", response_model=IssueRecord)
 async def get_issue(
     issue_id: int,
     db: Annotated[aiosqlite.Connection, Depends(get_db_dependency)],
@@ -2131,7 +2132,7 @@ async def list_articles_from_articles(
     )
 
 
-@app.get("/articles", response_model=ArticlePage)
+@app.get(f"{API_PREFIX}/articles", response_model=ArticlePage)
 async def list_articles(
     db: Annotated[aiosqlite.Connection, Depends(get_db_dependency)],
     journal_id: Annotated[list[int] | None, Query()] = None,
@@ -2230,7 +2231,7 @@ async def list_articles(
     )
 
 
-@app.get("/articles/{article_id}", response_model=ArticleRecord)
+@app.get(f"{API_PREFIX}/articles/{{article_id}}", response_model=ArticleRecord)
 async def get_article(
     article_id: int,
     db: Annotated[aiosqlite.Connection, Depends(get_db_dependency)],
@@ -2298,7 +2299,7 @@ async def get_article(
     return ArticleRecord(**row)
 
 
-@app.get("/articles/{article_id}/fulltext")
+@app.get(f"{API_PREFIX}/articles/{{article_id}}/fulltext")
 async def redirect_article_fulltext(
     article_id: int,
     db: Annotated[aiosqlite.Connection, Depends(get_db_dependency)],

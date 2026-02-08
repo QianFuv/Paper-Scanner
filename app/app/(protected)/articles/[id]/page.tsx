@@ -12,7 +12,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const DEFAULT_DB = 'utd24.sqlite';
 
 async function getArticle(id: string) {
-    const res = await fetch(`${API_BASE_URL}/articles/${id}?db=${DEFAULT_DB}`);
+    const res = await fetch(`${API_BASE_URL}/api/articles/${id}?db=${DEFAULT_DB}`);
     if (!res.ok) {
         throw new Error('Failed to fetch article');
     }
@@ -96,10 +96,10 @@ export default function ArticlePage() {
                   {(article.doi || article.platform_id) && (
                       <a
                           href={
-                              article.doi
-                                  ? `https://doi.org/${article.doi}`
-                                  : `${API_BASE_URL}/articles/${article.article_id}/fulltext?db=${DEFAULT_DB}`
-                          }
+                                  article.doi
+                                      ? `https://doi.org/${article.doi}`
+                                      : `${API_BASE_URL}/api/articles/${article.article_id}/fulltext?db=${DEFAULT_DB}`
+                              }
                           target="_blank"
                           rel="noreferrer"
                       >

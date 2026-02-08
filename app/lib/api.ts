@@ -104,11 +104,11 @@ export function getCurrentDatabase() {
 }
 
 export function getFullTextUrl(articleId: number): string {
-    return withDb(`/articles/${articleId}/fulltext`);
+    return withDb(`/api/articles/${articleId}/fulltext`);
 }
 
 export function getFullTextUrlForDatabase(articleId: number, dbName: string): string {
-    const url = new URL(`/articles/${articleId}/fulltext`, API_BASE_URL);
+    const url = new URL(`/api/articles/${articleId}/fulltext`, API_BASE_URL);
     url.searchParams.set('db', dbName);
     return url.toString();
 }
@@ -132,7 +132,7 @@ function withDb(url: string, params?: URLSearchParams): string {
 }
 
 export async function getDatabases(): Promise<string[]> {
-    const res = await fetch(`${API_BASE_URL}/meta/databases`);
+    const res = await fetch(`${API_BASE_URL}/api/meta/databases`);
     if (!res.ok) {
         return [DEFAULT_DB];
     }
@@ -155,7 +155,7 @@ export async function getArticles(
   }
   newParams.set('include_total', shouldIncludeTotal ? '1' : '0');
 
-  const res = await fetch(withDb('/articles', newParams));
+  const res = await fetch(withDb('/api/articles', newParams));
   if (!res.ok) {
     throw new Error('Failed to fetch articles');
   }
@@ -163,7 +163,7 @@ export async function getArticles(
 }
 
 export async function getAreas(): Promise<ValueCount[]> {
-  const res = await fetch(withDb('/meta/areas'));
+  const res = await fetch(withDb('/api/meta/areas'));
   if (!res.ok) {
     throw new Error('Failed to fetch areas');
   }
@@ -171,7 +171,7 @@ export async function getAreas(): Promise<ValueCount[]> {
 }
 
 export async function getYears(): Promise<YearSummary[]> {
-    const res = await fetch(withDb('/years'));
+    const res = await fetch(withDb('/api/years'));
     if (!res.ok) {
       throw new Error('Failed to fetch years');
     }
@@ -179,7 +179,7 @@ export async function getYears(): Promise<YearSummary[]> {
   }
 
 export async function getJournalOptions(): Promise<JournalOption[]> {
-  const res = await fetch(withDb('/meta/journals'));
+  const res = await fetch(withDb('/api/meta/journals'));
   if (!res.ok) {
     throw new Error('Failed to fetch journals');
   }
@@ -189,7 +189,7 @@ export async function getJournalOptions(): Promise<JournalOption[]> {
 export async function getWeeklyUpdates(windowDays: number = 7): Promise<WeeklyUpdatesResponse> {
   const params = new URLSearchParams();
   params.set('window_days', String(windowDays));
-  const url = new URL('/weekly-updates', API_BASE_URL);
+  const url = new URL('/api/weekly-updates', API_BASE_URL);
   url.search = params.toString();
   const res = await fetch(url.toString());
   if (!res.ok) {
@@ -199,7 +199,7 @@ export async function getWeeklyUpdates(windowDays: number = 7): Promise<WeeklyUp
 }
 
 export async function getArticleById(articleId: number, dbName: string): Promise<Article> {
-  const url = new URL(`/articles/${articleId}`, API_BASE_URL);
+  const url = new URL(`/api/articles/${articleId}`, API_BASE_URL);
   url.searchParams.set('db', dbName);
   const res = await fetch(url.toString());
   if (!res.ok) {

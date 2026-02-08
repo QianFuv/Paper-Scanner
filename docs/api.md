@@ -5,6 +5,8 @@ FastAPI backend for querying the BrowZine article index SQLite databases under
 
 Base URL examples below assume `http://localhost:8000`.
 
+All backend endpoints are exposed under the `/api` prefix.
+
 ## Database Selection
 
 All endpoints accept an optional `db` query parameter pointing to a database
@@ -60,7 +62,7 @@ Example:
 
 ### Health
 
-`GET /health`
+`GET /api/health`
 
 Returns:
 
@@ -70,23 +72,23 @@ Returns:
 
 ### Metadata
 
-`GET /meta/areas`
+`GET /api/meta/areas`
 
 Returns a list of journal areas with counts.
 
-`GET /meta/libraries`
+`GET /api/meta/libraries`
 
 Returns a list of library IDs with counts.
 
 ### Years
 
-`GET /years`
+`GET /api/years`
 
 Returns publication years with issue and journal counts.
 
 ### Journals
 
-`GET /journals`
+`GET /api/journals`
 
 Filters:
 
@@ -110,15 +112,15 @@ Sorting fields:
 
 Example:
 
-`/journals?area=Accounting&available=true&sort=scimago_rank:desc`
+`/api/journals?area=Accounting&available=true&sort=scimago_rank:desc`
 
-`GET /journals/{journal_id}`
+`GET /api/journals/{journal_id}`
 
 Returns a single journal record (404 if not found).
 
 ### Issues
 
-`GET /issues`
+`GET /api/issues`
 
 Filters:
 
@@ -140,15 +142,15 @@ Sorting fields:
 
 Example:
 
-`/issues?journal_id=34781&year=2024&sort=publication_year:desc`
+`/api/issues?journal_id=34781&year=2024&sort=publication_year:desc`
 
-`GET /issues/{issue_id}`
+`GET /api/issues/{issue_id}`
 
 Returns a single issue record (404 if not found).
 
 ### Articles
 
-`GET /articles`
+`GET /api/articles`
 
 Filters:
 
@@ -177,9 +179,9 @@ Sorting fields:
 
 Example:
 
-`/articles?journal_id=34781&year=2024&q=earnings OR disclosure&sort=date:desc`
+`/api/articles?journal_id=34781&year=2024&q=earnings OR disclosure&sort=date:desc`
 
-`GET /articles/{article_id}`
+`GET /api/articles/{article_id}`
 
 Returns a single article record (404 if not found).
 
