@@ -45,6 +45,40 @@ export interface JournalOption {
   title?: string;
 }
 
+export interface WeeklyArticle {
+  article_id: number;
+  journal_id: number;
+  issue_id?: number;
+  title?: string;
+  date?: string;
+  doi?: string;
+  journal_title?: string;
+  open_access?: number;
+  in_press?: number;
+}
+
+export interface WeeklyJournalUpdate {
+  journal_id: number;
+  journal_title?: string;
+  new_article_count: number;
+  articles: WeeklyArticle[];
+}
+
+export interface WeeklyDatabaseUpdate {
+  db_name: string;
+  run_id?: string;
+  generated_at: string;
+  new_article_count: number;
+  journals: WeeklyJournalUpdate[];
+}
+
+export interface WeeklyUpdatesResponse {
+  generated_at: string;
+  window_start: string;
+  window_end: string;
+  databases: WeeklyDatabaseUpdate[];
+}
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 export const DEFAULT_DB = 'utd24.sqlite';
 const DB_STORAGE_KEY = 'selected_database';
@@ -71,6 +105,12 @@ export function getCurrentDatabase() {
 
 export function getFullTextUrl(articleId: number): string {
     return withDb(`/articles/${articleId}/fulltext`);
+}
+
+export function getFullTextUrlForDatabase(articleId: number, dbName: string): string {
+    const url = new URL(`/articles/${articleId}/fulltext`, API_BASE_URL);
+    url.searchParams.set('db', dbName);
+    return url.toString();
 }
 
 function withDb(url: string, params?: URLSearchParams): string {
@@ -142,6 +182,28 @@ export async function getJournalOptions(): Promise<JournalOption[]> {
   const res = await fetch(withDb('/meta/journals'));
   if (!res.ok) {
     throw new Error('Failed to fetch journals');
+  }
+  return res.json();
+}
+
+export async function getWeeklyUpdates(windowDays: number = 7): Promise<WeeklyUpdatesResponse> {
+  const params = new URLSearchParams();
+  params.set('window_days', String(windowDays));
+  const url = new URL('/weekly-updates', API_BASE_URL);
+  url.search = params.toString();
+  const res = await fetch(url.toString());
+  if (!res.ok) {
+    throw new Error('Failed to fetch weekly updates');
+  }
+  return res.json();
+}
+
+export async function getArticleById(articleId: number, dbName: string): Promise<Article> {
+  const url = new URL(`/articles/${articleId}`, API_BASE_URL);
+  url.searchParams.set('db', dbName);
+  const res = await fetch(url.toString());
+  if (!res.ok) {
+    throw new Error('Failed to fetch article detail');
   }
   return res.json();
 }

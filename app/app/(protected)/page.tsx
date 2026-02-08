@@ -1,6 +1,7 @@
 import { Sidebar } from "@/components/feature/sidebar";
 import { SearchBar } from "@/components/feature/search-bar";
 import { ResultsList } from "@/components/feature/results-list";
+import { WeeklyUpdatesFab } from "@/components/feature/weekly-updates-fab";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Menu } from "lucide-react";
@@ -41,6 +42,7 @@ export default function Home() {
             <ResultsList />
           </div>
         </div>
+        <WeeklyUpdatesFab />
       </main>
     </div>
   );
