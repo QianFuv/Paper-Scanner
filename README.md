@@ -357,4 +357,7 @@ npm run lint     # ESLint check
 
 ## License
 
-All rights reserved.
+This project is licensed under the MIT License. See `LICENSE`.
+
+The bundled SQLite simple tokenizer binaries are from the upstream
+`wangfenjin/simple` project. See `libs/simple/README.md` for upstream details.
