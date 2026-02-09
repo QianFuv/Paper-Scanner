@@ -28,6 +28,7 @@ COPY data/meta data/meta
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV API_HOST="0.0.0.0"
+ENV SIMPLE_TOKENIZER_PATH="/app/libs/simple-linux/libsimple-linux-ubuntu-latest/libsimple"
 
 EXPOSE 8000
 
