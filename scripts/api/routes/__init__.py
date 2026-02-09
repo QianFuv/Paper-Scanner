@@ -1,0 +1,29 @@
+"""Route package registration."""
+
+from __future__ import annotations
+
+from fastapi import FastAPI
+
+from scripts.api.routes import articles, health, issues, journals, meta, weekly
+
+
+def register_routes(app: FastAPI) -> None:
+    """
+    Register all API routers on the application instance.
+
+    Args:
+        app: FastAPI application.
+
+    Returns:
+        None.
+    """
+    routers = (
+        health.router,
+        meta.router,
+        journals.router,
+        issues.router,
+        articles.router,
+        weekly.router,
+    )
+    for router in routers:
+        app.include_router(router)

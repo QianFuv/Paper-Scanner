@@ -23,13 +23,12 @@ dev = [
 ]
 
 [project.scripts]
-metadata = "scripts.utility.metadata:main"
 index = "scripts.index:main"
 api = "scripts.api:main"
 notify = "scripts.notify:main"
 
-[tool.setuptools]
-packages = ["scripts"]
+[tool.setuptools.packages.find]
+include = ["scripts*"]
 
 [build-system]
 requires = ["setuptools>=45", "wheel"]
