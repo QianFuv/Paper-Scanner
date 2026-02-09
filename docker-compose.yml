@@ -1,5 +1,6 @@
 services:
   api:
+    build: .
     image: ghcr.io/qianfuv/paper-scanner-api:latest
     expose:
       - "8000"
@@ -9,6 +10,7 @@ services:
       - API_HOST=0.0.0.0
 
   app:
+    build: ./app
     image: ghcr.io/qianfuv/paper-scanner-app:latest
     ports:
       - "3000:3000"

@@ -3,13 +3,13 @@ name = "ps"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = "==3.12.2"
+requires-python = ">=3.12"
 dependencies = [
     "aiosqlite>=0.22.1",
     "fastapi>=0.128.0",
     "httpx>=0.28.1",
     "openai>=2.17.0",
-    "playwright>=1.57.0",
+
     "quickjs>=1.19.4",
     "selectolax>=0.4.6",
     "tqdm>=4.67.1",
@@ -19,7 +19,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "mypy>=1.18.2",
-    "ruff>=0.14.6"
+    "playwright>=1.57.0",
+    "ruff>=0.14.6",
 ]
 
 [project.scripts]
