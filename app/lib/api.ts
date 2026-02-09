@@ -79,7 +79,13 @@ export interface WeeklyUpdatesResponse {
   databases: WeeklyDatabaseUpdate[];
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
+
+function resolveBase(): string {
+    if (API_BASE_URL) return API_BASE_URL;
+    if (typeof window !== 'undefined') return window.location.origin;
+    return 'http://localhost:8000';
+}
 export const DEFAULT_DB = 'utd24.sqlite';
 const DB_STORAGE_KEY = 'selected_database';
 
@@ -108,13 +114,13 @@ export function getFullTextUrl(articleId: number): string {
 }
 
 export function getFullTextUrlForDatabase(articleId: number, dbName: string): string {
-    const url = new URL(`/api/articles/${articleId}/fulltext`, API_BASE_URL);
+    const url = new URL(`/api/articles/${articleId}/fulltext`, resolveBase());
     url.searchParams.set('db', dbName);
     return url.toString();
 }
 
 function withDb(url: string, params?: URLSearchParams): string {
-    const urlObj = new URL(url, API_BASE_URL); // Handle relative or absolute
+    const urlObj = new URL(url, resolveBase());
     const p = urlObj.searchParams;
     
     // Merge provided params
@@ -132,7 +138,7 @@ function withDb(url: string, params?: URLSearchParams): string {
 }
 
 export async function getDatabases(): Promise<string[]> {
-    const res = await fetch(`${API_BASE_URL}/api/meta/databases`);
+    const res = await fetch(`${resolveBase()}/api/meta/databases`);
     if (!res.ok) {
         return [DEFAULT_DB];
     }
@@ -189,7 +195,7 @@ export async function getJournalOptions(): Promise<JournalOption[]> {
 export async function getWeeklyUpdates(windowDays: number = 7): Promise<WeeklyUpdatesResponse> {
   const params = new URLSearchParams();
   params.set('window_days', String(windowDays));
-  const url = new URL('/api/weekly-updates', API_BASE_URL);
+  const url = new URL('/api/weekly-updates', resolveBase());
   url.search = params.toString();
   const res = await fetch(url.toString());
   if (!res.ok) {
@@ -199,7 +205,7 @@ export async function getWeeklyUpdates(windowDays: number = 7): Promise<WeeklyUp
 }
 
 export async function getArticleById(articleId: number, dbName: string): Promise<Article> {
-  const url = new URL(`/api/articles/${articleId}`, API_BASE_URL);
+  const url = new URL(`/api/articles/${articleId}`, resolveBase());
   url.searchParams.set('db', dbName);
   const res = await fetch(url.toString());
   if (!res.ok) {

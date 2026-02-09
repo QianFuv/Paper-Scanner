@@ -3,6 +3,7 @@ revision = 3
 requires-python = "==3.12.2"
 required-markers = [
     "sys_platform == 'win32'",
+    "sys_platform == 'linux'",
 ]
 
 [[package]]

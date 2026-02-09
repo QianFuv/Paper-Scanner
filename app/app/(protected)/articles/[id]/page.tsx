@@ -8,11 +8,17 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { ExternalLink, ArrowLeft } from 'lucide-react';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 const DEFAULT_DB = 'utd24.sqlite';
 
+function resolveBase(): string {
+    if (API_BASE_URL) return API_BASE_URL;
+    if (typeof window !== 'undefined') return window.location.origin;
+    return 'http://localhost:8000';
+}
+
 async function getArticle(id: string) {
-    const res = await fetch(`${API_BASE_URL}/api/articles/${id}?db=${DEFAULT_DB}`);
+    const res = await fetch(`${resolveBase()}/api/articles/${id}?db=${DEFAULT_DB}`);
     if (!res.ok) {
         throw new Error('Failed to fetch article');
     }
@@ -98,7 +104,7 @@ export default function ArticlePage() {
                           href={
                                   article.doi
                                       ? `https://doi.org/${article.doi}`
-                                      : `${API_BASE_URL}/api/articles/${article.article_id}/fulltext?db=${DEFAULT_DB}`
+                                      : `${resolveBase()}/api/articles/${article.article_id}/fulltext?db=${DEFAULT_DB}`
                               }
                           target="_blank"
                           rel="noreferrer"

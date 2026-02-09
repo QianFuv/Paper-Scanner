@@ -1,0 +1,34 @@
+FROM node:20-alpine AS deps
+
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml ./
+
+RUN corepack enable pnpm && pnpm install --frozen-lockfile
+
+
+FROM node:20-alpine AS build
+
+WORKDIR /app
+
+COPY --from=deps /app/node_modules node_modules/
+COPY . .
+
+ARG INTERNAL_API_URL=http://api:8000
+ENV INTERNAL_API_URL=$INTERNAL_API_URL
+
+RUN corepack enable pnpm && pnpm build
+
+
+FROM node:20-alpine
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+COPY --from=build /app/.next/standalone ./
+COPY --from=build /app/.next/static .next/static/
+
+EXPOSE 3000
+
+CMD ["node", "server.js"]
