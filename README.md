@@ -21,33 +21,30 @@ A full-stack application for aggregating, indexing, and searching academic journ
 | Database | SQLite (WAL mode, FTS5) |
 | Data Fetching | httpx, Playwright, selectolax |
 | AI/Notification | OpenAI SDK (SiliconFlow), PushPlus |
+| Deployment | Docker, GitHub Actions, GHCR |
 | Dev Tools | uv, Ruff, mypy |
 
 ## Quick Start
 
 ### Prerequisites
 
-- Python 3.12.2 (exact version required)
-- [uv](https://docs.astral.sh/uv/) package manager
-- Node.js 20+
+- Docker and Docker Compose
 
-### Installation
+### 1. Download and Configure
 
-```bash
-git clone <repo-url>
-cd Paper-Scanner
+Download `docker-compose.yml`, then create the directory structure:
 
-# Install Python dependencies
-uv sync
-uv sync --extra dev
-
-# Install frontend dependencies
-cd app
-npm install
-cd ..
+```
+project/
+├── docker-compose.yml
+├── config/
+│   └── auth.yaml           # Frontend authentication tokens
+└── data/
+    ├── meta/               # Journal metadata CSV files
+    └── push/               # subscriptions.json (optional, for notifications)
 ```
 
-### Prepare Data
+### 2. Prepare Data
 
 Place journal metadata CSV files in `data/meta/`. Each CSV must have the following columns:
 
@@ -67,26 +64,34 @@ The Accounting Review,0001-4826,34781,Accounting,3050
 Journal of Accounting and Economics,0165-4101,4204,Accounting,3050
 ```
 
-### Build the Index
+### 3. Pull Images and Build Index
 
 ```bash
-uv run index
+docker compose pull
+docker compose run --rm api uv run index
 ```
 
 This fetches article data from BrowZine/WeipuAPI and creates SQLite databases in `data/index/`.
 
-### Start the Application
+### 4. Start the Application
 
 ```bash
-# Start backend API (port 8000)
-uv run api
-
-# Start frontend dev server (port 3000) in another terminal
-cd app
-npm run dev
+docker compose up -d
 ```
 
-Visit `http://localhost:3000` to access the web interface.
+Visit http://localhost:3000. Only port 3000 is exposed — the frontend proxies API requests to the backend internally.
+
+### Updating
+
+```bash
+# Incremental index update
+docker compose run --rm api uv run index --update
+
+# Send notifications
+docker compose run --rm api uv run notify
+```
+
+See [Docker Deployment docs](docs/docker.md) for full details on architecture, CI/CD, environment variables, and troubleshooting.
 
 ## Project Structure
 
@@ -333,6 +338,28 @@ Each CSV file produces a corresponding SQLite database in `data/index/`. The sch
 
 ## Development
 
+### Local Setup
+
+Requires Python 3.12+, [uv](https://docs.astral.sh/uv/), and Node.js 20+.
+
+```bash
+# Install Python dependencies
+uv sync
+uv sync --extra dev
+
+# Install frontend dependencies
+cd app
+pnpm install
+cd ..
+
+# Start backend API (port 8000)
+uv run api
+
+# Start frontend dev server (port 3000) in another terminal
+cd app
+pnpm run dev
+```
+
 ### Code Quality
 
 ```bash
@@ -350,9 +377,9 @@ uv run mypy
 
 ```bash
 cd app
-npm run dev      # Dev server with hot reload
-npm run build    # Production build
-npm run lint     # ESLint check
+pnpm run dev      # Dev server with hot reload
+pnpm run build    # Production build
+pnpm run lint     # ESLint check
 ```
 
 ## License

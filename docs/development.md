@@ -8,6 +8,7 @@ For detailed reference on specific subsystems, see:
 - [BrowZine API](browzine_api.md) - BrowZine API integration
 - [WeipuAPI](weipu_api.md) - CQVIP data extraction
 - [Notification Pipeline](notify.md) - AI-powered article notifications
+- [Docker Deployment](docker.md) - Container build, configuration, and CI/CD
 
 ## Architecture Overview
 
