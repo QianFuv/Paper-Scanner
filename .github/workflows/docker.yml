@@ -3,12 +3,44 @@ name: Build and Push Docker Images
 on:
   push:
     branches: [main]
+    paths:
+      - "scripts/**"
+      - "libs/**"
+      - "data/meta/**"
+      - "Dockerfile"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "app/**"
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      app: ${{ steps.filter.outputs.app }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            api:
+              - "scripts/**"
+              - "libs/**"
+              - "data/meta/**"
+              - "Dockerfile"
+              - "pyproject.toml"
+              - "uv.lock"
+            app:
+              - "app/**"
+
   build-api:
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -42,6 +74,8 @@ jobs:
           cache-to: type=gha,mode=max
 
   build-app:
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
