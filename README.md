@@ -14,7 +14,7 @@ A full-stack application for aggregating, indexing, and searching academic journ
 
 ## Screenshots
 
-![](https://i.see.you/2026/02/10/Mcq6/ops-coffee-1770699693386.png)
+![](https://i.see.you/2026/02/10/W8if/d9c1cb7.png)
 
 ## Tech Stack
 
