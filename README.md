@@ -12,6 +12,10 @@ A full-stack application for aggregating, indexing, and searching academic journ
 - **Incremental sync** - Change tracking with article-level diff for efficient updates
 - **Multi-process indexing** - Parallel journal processing for large-scale data collection
 
+## Screenshots
+
+![](https://i.see.you/2026/02/10/Mcq6/ops-coffee-1770699693386.png)
+
 ## Tech Stack
 
 | Layer | Technology |
