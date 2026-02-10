@@ -136,26 +136,28 @@ Paper-Scanner/
 
 ## CLI Commands
 
-### `uv run index` - Build/update article index
+All CLI commands run inside the API container via `docker compose run --rm api`.
+
+### `index` - Build/update article index
 
 ```bash
 # Index all CSV files in data/meta/
-uv run index
+docker compose run --rm api uv run index
 
 # Index a specific CSV
-uv run index --file utd24.csv
+docker compose run --rm api uv run index --file utd24.csv
 
 # Incremental update with change tracking
-uv run index --update
+docker compose run --rm api uv run index --update
 
 # Update and send notifications
-uv run index --update --notify
+docker compose run --rm api uv run index --update --notify
 
 # Parallel processing
-uv run index --workers 16 --processes 4
+docker compose run --rm api uv run index --workers 16 --processes 4
 
 # Dry-run notifications (no actual delivery)
-uv run index --update --notify --notify-dry-run
+docker compose run --rm api uv run index --update --notify --notify-dry-run
 ```
 
 | Flag | Default | Description |
@@ -170,21 +172,21 @@ uv run index --update --notify --notify-dry-run
 | `--notify / --no-notify` | disabled | Send notifications after update (requires `--update`) |
 | `--notify-dry-run` | disabled | Preview notification selection without sending |
 
-### `uv run api` - Start REST API server
+### `api` - REST API server
 
-Starts the FastAPI server on `http://127.0.0.1:8000`.
+Started automatically by `docker compose up`. Listens on port 8000 (internal only, proxied by frontend).
 
-### `uv run notify` - Run notification pipeline
+### `notify` - Run notification pipeline
 
 ```bash
 # Run with default settings
-uv run notify
+docker compose run --rm api uv run notify
 
 # Specify database and change manifest
-uv run notify --db utd24.sqlite --changes-file data/push_state/utd24.changes.json
+docker compose run --rm api uv run notify --db utd24.sqlite --changes-file data/push_state/utd24.changes.json
 
 # Dry run
-uv run notify --dry-run
+docker compose run --rm api uv run notify --dry-run
 ```
 
 | Flag | Default | Description |
